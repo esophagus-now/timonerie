@@ -7,6 +7,9 @@
 #include <netdb.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sched.h>
+#include <string.h>
 #include "queue.h"
 #include "textio.h"
 
@@ -21,13 +24,12 @@ void producer_cleanup(void *v) {
 }
 
 void* producer(void *v) {
-    char c;
-    
     queue *q = (queue*)v;
     
     pthread_cleanup_push(producer_cleanup, q);
     
     //Read a single character from stdin until EOF
+    char c;
     while (read(0, &c, 1) > 0) {
         enqueue_single(q, c);
     }
@@ -35,6 +37,213 @@ void* producer(void *v) {
     pthread_cleanup_pop(1);
     
     return NULL;
+}
+
+void get_net_cleanup(void *v) {
+    queue *q = (queue*)v;
+    
+    pthread_mutex_lock(&q->mutex);
+    q->num_producers--;
+    pthread_mutex_unlock(&q->mutex);
+    
+    pthread_cond_broadcast(&q->can_cons);
+}
+
+void get_net_addrinfo_cleanup(void *v) {
+    struct addrinfo **res = (struct addrinfo **)v;
+    if (*res != NULL) freeaddrinfo(*res);
+}
+
+void get_net_socket_cleanup(void *v) {
+    int *p = (int*)v;
+    close(*p);
+}
+
+typedef struct {
+    queue *q;
+    char *node;
+    char *serv;
+} get_net_args;
+
+void* get_net(void *v) {
+    get_net_args *args = (get_net_args *)v;
+    queue *q = args->q;
+    
+    pthread_cleanup_push(get_net_cleanup, q);
+    
+    struct addrinfo *res;
+    struct addrinfo hint = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+        .ai_protocol = 0 //Not sure if this protocol field needs to be set
+    };
+    
+    int rc = getaddrinfo(args->node, args->serv, &hint, &res);
+    if (rc < 0) {
+        fprintf(stderr, "Could not resolve [%s]: %s\n", args->node, gai_strerror(rc));
+        goto done;
+    }
+    pthread_cleanup_push(get_net_addrinfo_cleanup, &res);
+    
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd < 0) {
+        fprintf(stderr, "Could not open socket: %s\n", strerror(errno));
+        goto done;
+    }
+    
+    pthread_cleanup_push(get_net_socket_cleanup, &sfd);
+    
+    rc = connect(sfd, res->ai_addr, res->ai_addrlen);
+    if (rc < 0) {
+        fprintf(stderr, "Could not connect socket: %s\n", strerror(errno));
+        goto done;
+    }
+    
+    //This is a pretty long-running thread, so free the memory ASAP
+    freeaddrinfo(res);
+    //Don't forget to mark as NULL so cleanup function can deal with it
+    res = NULL;
+    
+    char buf[64];
+    int len;
+    while ((len = read(sfd, buf, 64)) > 0) {
+        rc = queue_write(q, buf, len);
+        if (rc < 0) {
+            fprintf(stderr, "Could not append network data into queue");
+            goto done;
+        }
+    }
+    
+    done:
+    close(sfd);
+    pthread_cleanup_pop(1);
+    pthread_cleanup_pop(1);
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+typedef struct {
+    char *name;
+    int x, y; 
+    int w, h; //Minimum: 6 by 6?
+    
+    //TODO: some nice way of storing the data from the network
+    
+    //Mirror registers in hardware
+    unsigned keep_pausing;
+    unsigned keep_logging;
+    unsigned log_cnt;
+    unsigned keep_dropping;
+    unsigned drop_cnt;
+    unsigned inj_TDATA;
+    unsigned inj_TVALID;
+    unsigned inj_TKEEP;
+    unsigned inj_TLAST;
+    unsigned inj_TDEST;
+    unsigned inj_TID;
+} dbg_guv;
+
+dbg_guv* new_dbg_guv(char *name) {
+    dbg_guv *ret = malloc(sizeof(dbg_guv));
+    memset(ret, 0, sizeof(dbg_guv));
+    
+    if (name != NULL) {
+        ret->name = strdup(name);
+    }
+    ret->w = 6;
+    ret->h = 6;
+    
+    return ret;
+}
+
+void del_dbg_guv(dbg_guv *d) {
+    if (d != NULL) {
+        if (d->name != NULL) free(d->name);
+        free(d);
+    }
+}
+
+//Returns number of bytes added into buf.
+int redraw_dbg_guv(dbg_guv *g, char *buf) {
+    int bytes = 0;
+    
+    if (g->x < 0 || g->y < 0) { //TODO: screen sizes
+        return bytes;
+    }
+    
+    if (g->w < 6) {
+        g->w = 6;
+    }
+    
+    if (g->h < 6) {
+        g->h = 6;
+    }
+    
+    int inc;
+    int i;
+    
+    //Top bar
+    inc = cursor_pos_cmd(buf, g->x, g->y);
+    buf += inc;
+    //*buf++ = BOX_TL;
+    *buf++ = 0b11100010;
+    *buf++ = 0b10010100;
+    *buf++ = 0b10001100;
+    bytes += inc + 3;
+    for (i = 1; i < g->w - 1; i++) {
+        //*buf++ = BOX_HORZ;
+        *buf++ = 0b11100010;
+        *buf++ = 0b10010100;
+        *buf++ = 0b10000000;
+        bytes += 3;
+    }
+    //*buf++ = BOX_TR;
+    *buf++ = 0b11100010;
+    *buf++ = 0b10010100;
+    *buf++ = 0b10010000;
+    bytes+=3;
+    
+    //Vertical bars
+    for (i = 1; i < g->h - 1; i++) {
+        inc = cursor_pos_cmd(buf, g->x, g->y + i);
+        buf += inc;
+        //*buf++ = BOX_VERT;
+        *buf++ = 0b11100010;
+        *buf++ = 0b10010100;
+        *buf++ = 0b10000010;
+        bytes += inc + 3;
+        
+        inc = cursor_pos_cmd(buf, g->x + g->w - 1, g->y + i);
+        buf += inc;
+        //*buf++ = BOX_VERT;
+        *buf++ = 0b11100010;
+        *buf++ = 0b10010100;
+        *buf++ = 0b10000010;
+        bytes += inc + 3;
+    }
+    
+    //Bottom bar
+    inc = cursor_pos_cmd(buf, g->x, g->y + g->h - 1);
+    buf += inc;
+    //*buf++ = BOX_BL;
+    *buf++ = 0b11100010;
+    *buf++ = 0b10010100;
+    *buf++ = 0b10010100;
+    bytes += inc + 3;
+    for (i = 1; i < g->w - 1; i++) {
+        //*buf++ = BOX_HORZ;
+        *buf++ = 0b11100010;
+        *buf++ = 0b10010100;
+        *buf++ = 0b10000000;
+        bytes += 3;
+    }
+    //*buf++ = BOX_BR;
+    *buf++ = 0b11100010;
+    *buf++ = 0b10010100;
+    *buf++ = 0b10011000;
+    bytes+=3;
+    
+    return bytes;
 }
 
 int main(int argc, char **argv) {
@@ -51,20 +260,57 @@ int main(int argc, char **argv) {
     q.num_producers++;
     pthread_mutex_unlock(&q.mutex);
     
+    queue netq = QUEUE_INITIALIZER;
+    pthread_t net_prod;
+    
+    get_net_args args = {
+        .q = &netq,
+        .node = (argc > 1) ? argv[1] : "localhost",
+        .serv = (argc > 2) ? argv[2] : "5555"
+    };
+    pthread_create(&net_prod, NULL, get_net, &args);
+    pthread_mutex_lock(&q.mutex);
+    netq.num_producers++;
+    pthread_mutex_unlock(&q.mutex);
+    
+    #define NET_DATA_MAX 80
+    char net_data[NET_DATA_MAX];
+    int net_data_pos = 0;
+    
+    dbg_guv *g = new_dbg_guv(NULL);
+    g->x = 5;
+    g->y = 7;
+    
     while(1) {
-        char line[80];
+        int rc;
+        char c;
+        
+        char line[256];
         int len = 0;
+        
+        len = redraw_dbg_guv(g, line);
+        write(1, line, len);
+        
+        while(nb_dequeue_single(&netq, &c) == 0) {
+            net_data[net_data_pos++] = c;
+            if (c == '\n' || net_data_pos == NET_DATA_MAX - 1) {
+                cursor_pos(0,5);
+                write(1, net_data, net_data_pos);
+                net_data_pos = 0;
+            }
+        }   
         
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
         //loop
-        char c;
-        int rc = dequeue_single(&q, &c);
-        if (rc < 0) {
+        rc = nb_dequeue_single(&q, &c);
+        if (rc > 0) {
+            sched_yield();
+            continue;
+        } else if (rc < 0) {
             cursor_pos(0,0);
             sprintf(line, "Error reading from queue. Quitting...%n", &len);
             write(1, line, len);
-            fflush(stdout); //Is this necessary?
             pthread_cancel(prod);
             break;
         }
@@ -73,6 +319,7 @@ int main(int argc, char **argv) {
         //If user pressed ~ we can quit
         if (c == '~') {
             pthread_cancel(prod);
+            pthread_cancel(net_prod);
             break;
         } else if (c == '\x1b') {
             char btn[32];
@@ -90,7 +337,7 @@ int main(int argc, char **argv) {
             cursor_pos(0,0);
             int tmp;
             sprintf(line, "You pressed 0x%02x%n", c & 0xFF, &tmp);
-            len += tmp;
+            len = tmp;
             if (isprint(c)) {
                 sprintf(line + len, " = '%c'%n", c, &tmp);
                 len += tmp;
@@ -102,45 +349,16 @@ int main(int argc, char **argv) {
         }
     }
     
+    pthread_mutex_lock(&netq.mutex);
+    if (netq.num_producers > 0) {
+        pthread_cancel(net_prod);
+    }
+    pthread_mutex_unlock(&netq.mutex);
+    
+    pthread_join(net_prod, NULL);
     pthread_join(prod, NULL);
     
-    /*if (argc > 1) {
-        //Use argv[1] for hostname lookup
-        struct addrinfo *res;
-        char *serv = NULL;
-        if (argc > 2) serv = argv[2];
-        
-        struct addrinfo hint = {
-            .ai_family = AF_INET,
-            .ai_socktype = SOCK_STREAM,
-            .ai_protocol = 0
-        };
-        
-        int rc = getaddrinfo(argv[1], serv, &hint, &res);
-        if (rc < 0) {
-            printf("Could not resolve [%s]: %s\n", argv[1], gai_strerror(rc));
-        } else {
-            struct addrinfo *cur;
-            for (cur = res; cur; cur = cur->ai_next) {
-                printf("addrinfo:\n");
-                printf("\tai_flags = 0x%08x\n", cur->ai_flags);
-                printf("\tai_family = 0x%08x\n", cur->ai_family);
-                printf("\tai_socktype = 0x%08x\n", cur->ai_socktype);
-                printf("\tai_protocol = 0x%08x\n", cur->ai_protocol);
-                printf("\tai_addrlen = %d\n", cur->ai_addrlen);
-                printf("\tai_addr = \n");
-                printf("\t\tsa_family = %04x\n", cur->ai_addr->sa_family);
-                printf("\t\tsa_data = 0x ");
-                int i;
-                for (i = 0; i < cur->ai_addrlen - sizeof(cur->ai_addr->sa_family); i++) {
-                    printf("%02x ", cur->ai_addr->sa_data[i] & 0xFF);
-                }
-                printf("\n\tai_canonname = %s\n", cur->ai_canonname);
-            }
-            freeaddrinfo(res);
-        }
-    }*/
-    
+    del_dbg_guv(g);
     clean_screen();
     return 0;
 }

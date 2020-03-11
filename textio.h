@@ -22,7 +22,31 @@
 #define REPORT_CURSOR_OFF "\x1b[?1003l"
 #define LEN_REPORT_CURSOR_OFF 8
 
+//#define BOX_VERT '\xb3'
+//#define BOX_TR   '\xbf'
+//#define BOX_BL   '\xc0'
+//#define BOX_HORZ '\xc4'
+//#define BOX_BR   '\xd9'
+//#define BOX_TL   '\xda'
+
+#define BOX_VERT '|'
+#define BOX_TR   '+'
+#define BOX_BL   '+'
+#define BOX_HORZ '-'
+#define BOX_BR   '+'
+#define BOX_TL   '+'
+
+#define BOX_T_UP    '\xc1'
+#define BOX_T_DOWN  '\xc2'
+#define BOX_T_LEFT  '\xb4'
+#define BOX_T_RIGHT '\xc3'
+
+#define BOX_XROADS '\xc5'
+
 void cursor_pos(int x, int y);
+
+//Writes command into buf, returns number of bytes written
+int cursor_pos_cmd(char *buf, int x, int y);
 
 void term_init();
 

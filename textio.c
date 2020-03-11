@@ -14,6 +14,13 @@ void cursor_pos(int x, int y) {
     write(1, line, len);
 }
 
+//Writes command into buf, returns number of bytes written
+int cursor_pos_cmd(char *buf, int x, int y){
+    int len;
+    sprintf(buf, CSI "%d;%dH%n", y, x, &len);
+    return len;
+}
+
 void term_init() {
     //Get current TTY attributes and save in old
     tcgetattr(0, &old);
