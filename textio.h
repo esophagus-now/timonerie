@@ -54,6 +54,59 @@ void clean_screen();
 
 //Returns 0 if x and y are valid, -1 otherwise
 //Pass NULL for either int to ignore that parameter
-int parse_mouse(queue *q, char *btn_info, int *x, int *y);
+int parse_mouse(queue *q, char *btn, int *x, int *y);
+
+/*
+    TEXTIO_LMB, //Left-mouse button
+    TEXTIO_RMB,
+    TEXTIO_MMB,
+    TEXTIO_NOB, //A button was released (don't know which)
+    TEXTIO_MVT, //Mouse movement
+    TEXTIO_WUP, //Wheel up
+    TEXTIO_WDN
+*/
+#define  BTN_IDENTS \
+    X(TEXTIO_LMB), \
+    X(TEXTIO_RMB), \
+    X(TEXTIO_MMB), \
+    X(TEXTIO_NOB), \
+    X(TEXTIO_MVT), \
+    X(TEXTIO_WUP), \
+    X(TEXTIO_WDN)
+
+#define X(x) x
+enum btn_consts {
+    BTN_IDENTS
+};
+#undef X
+
+extern char *BUTTON_NAMES[];
+
+typedef struct {
+    int btn; //One of the constants in the above enum
+    int shift;
+    int meta;
+    int ctrl;
+    int x;
+    int y;
+    char *error_str;
+    char smoking_gun;
+    char expected;
+} btn_info;
+
+//Some error messages
+extern char *TEXTIO_SUCC;
+extern char *TEXTIO_UNEX; //Kind of a catch-all, but whatever
+extern char *TEXTIO_BADX;
+extern char *TEXTIO_BADY;
+extern char *TEXTIO_BADB;
+
+//Maintains internal state machine. Uses input char to advance state machine,
+//returning 0 on succesful acceptance, and returning 1 if no error occurred but
+//the state machine is not finished yet.
+//On error, sets btn->error_str, btn->expected, and btn->smoking_gun and 
+//returns -1
+//Pass NULL for either int to ignore that parameter
+int parse_mouse_cr(char c, btn_info *btn);
 
 #endif

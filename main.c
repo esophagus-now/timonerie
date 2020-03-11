@@ -281,6 +281,13 @@ int main(int argc, char **argv) {
     g->x = 5;
     g->y = 7;
     
+    #define NORMAL 0
+    #define MOUSE 1
+    
+    int state = NORMAL;
+    
+    btn_info btn;
+    
     while(1) {
         int rc;
         char c;
@@ -315,38 +322,55 @@ int main(int argc, char **argv) {
             break;
         }
         
-        
-        //If user pressed ~ we can quit
-        if (c == '~') {
-            pthread_cancel(prod);
-            pthread_cancel(net_prod);
-            break;
-        } else if (c == '\x1b') {
-            char btn[32];
-            int x, y;
-            int rc = parse_mouse(&q, btn, &x, &y);
-            cursor_pos(0,2);
-            if (rc < 0) {
-                sprintf(line, "Could not parse mouse: %s%n", btn, &len);
-                write(1, line, len);
+        if (state == NORMAL) {
+            //If user pressed ~ we can quit
+            if (c == '~') {
+                pthread_cancel(prod);
+                pthread_cancel(net_prod);
+                break;
+            } else if (c == '\x1b') {
+                state = MOUSE;
             } else {
-                sprintf(line, "%s at %d,%d                                         %n", btn, x, y, &len);
+                cursor_pos(0,1);
+                int tmp;
+                sprintf(line, "You pressed 0x%02x%n", c & 0xFF, &tmp);
+                len = tmp;
+                if (isprint(c)) {
+                    sprintf(line + len, " = '%c'%n", c, &tmp);
+                    len += tmp;
+                } else {
+                    sprintf(line + len, "       %n", &tmp);
+                    len += tmp;
+                }
                 write(1, line, len);
             }
-        } else {
-            cursor_pos(0,0);
-            int tmp;
-            sprintf(line, "You pressed 0x%02x%n", c & 0xFF, &tmp);
-            len = tmp;
-            if (isprint(c)) {
-                sprintf(line + len, " = '%c'%n", c, &tmp);
-                len += tmp;
+        } else if (state == MOUSE) {
+            rc = parse_mouse_cr(c, &btn);
+            if (rc > 0) {
+                sched_yield();
+                continue;
+            } else if (rc == 0) {
+                sprintf(line, "%s%s%s%s at %d %d%n", 
+                    btn.shift ? "(shift)" : "",
+                    btn.meta ? "(meta)" : "",
+                    btn.ctrl ? "(ctrl)" : "",
+                    BUTTON_NAMES[btn.btn],
+                    btn.x,
+                    btn.y,
+                    &len
+                );
+                cursor_pos(0,2);
+                write(1, line, len);
+                state = NORMAL;
             } else {
-                sprintf(line + len, "       %n", &tmp);
-                len += tmp;
+                cursor_pos(0,2);
+                sprintf(line, "Could not parse mouse: %s%n", btn.error_str, &len);
+                write(1, line, len);
+                state = NORMAL;
             }
-            write(1, line, len);
         }
+        
+        sched_yield();
     }
     
     pthread_mutex_lock(&netq.mutex);
