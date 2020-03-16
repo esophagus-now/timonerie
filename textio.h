@@ -4,7 +4,7 @@
 #include <termios.h>
 #include "queue.h"
 
-#define ESC "\x1b"
+#define ESCAPE "\x1b"
 #define CSI "\x1b["
 
 #define ALT_BUF_ON "\x1b[?1049h"
@@ -22,26 +22,12 @@
 #define REPORT_CURSOR_OFF "\x1b[?1003l"
 #define LEN_REPORT_CURSOR_OFF 8
 
-//#define BOX_VERT '\xb3'
-//#define BOX_TR   '\xbf'
-//#define BOX_BL   '\xc0'
-//#define BOX_HORZ '\xc4'
-//#define BOX_BR   '\xd9'
-//#define BOX_TL   '\xda'
-
 #define BOX_VERT '|'
 #define BOX_TR   '+'
 #define BOX_BL   '+'
 #define BOX_HORZ '-'
 #define BOX_BR   '+'
 #define BOX_TL   '+'
-
-#define BOX_T_UP    '\xc1'
-#define BOX_T_DOWN  '\xc2'
-#define BOX_T_LEFT  '\xb4'
-#define BOX_T_RIGHT '\xc3'
-
-#define BOX_XROADS '\xc5'
 
 void cursor_pos(int x, int y);
 
@@ -50,30 +36,13 @@ int cursor_pos_cmd(char *buf, int x, int y);
 
 void term_init();
 
+void enter_type_mode();
+
+void exit_type_mode();
+
 void clean_screen();
 
-//Returns 0 if x and y are valid, -1 otherwise
-//Pass NULL for either int to ignore that parameter
-int parse_mouse(queue *q, char *btn, int *x, int *y);
-
-/*
-    TEXTIO_LMB, //Left-mouse button
-    TEXTIO_RMB,
-    TEXTIO_MMB,
-    TEXTIO_NOB, //A button was released (don't know which)
-    TEXTIO_MVT, //Mouse movement
-    TEXTIO_WUP, //Wheel up
-    TEXTIO_WDN
-*/
-#define  BTN_IDENTS \
-    X(TEXTIO_LMB), \
-    X(TEXTIO_RMB), \
-    X(TEXTIO_MMB), \
-    X(TEXTIO_NOB), \
-    X(TEXTIO_MVT), \
-    X(TEXTIO_WUP), \
-    X(TEXTIO_WDN)
-
+//Constants and printable strings for mouse buttons
 #define X(x) x
 enum btn_consts {
     BTN_IDENTS
@@ -82,31 +51,107 @@ enum btn_consts {
 
 extern char *BUTTON_NAMES[];
 
-typedef struct {
+//Constants and printable strings for cursor/function keys
+#define X(x) x
+typedef enum _getch_fn_key_t {
+    GETCH_IDENTS
+} getch_fn_key_t;
+#undef X
+
+extern char *FN_KEY_NAMES[];
+
+//When reading a "char" from the input, it could be any one of these things:
+typedef enum _getch_type {
+    TEXTIO_GETCH_PLAIN,
+    TEXTIO_GETCH_WIDE, //For multi-byte unicode characters
+    TEXTIO_GETCH_FN_KEY, //If an arrow or Fn key was pressed
+    TEXTIO_GETCH_ESCSEQ,
+    TEXTIO_GETCH_MOUSE //If a mouse sequence was parsed
+} getch_type;
+
+//When calling textio_getch_cr, it will fill a textio_input struct
+#define TEXTIO_MAX_ESC_PARAMS 16
+typedef struct _textio_input{
+    getch_type type;
+    
+    //Used when type = TEXTIO_GETCH_PLAIN
+    char c; 
+    
+    //Used when type = TEXTIO_GETCH_WIDE
+    int wc; 
+    
+    //Used when type = TEXTIO_GETCH_FN_KEY
+    getch_fn_key_t key; 
+    
+    //Used when type = TEXTIO_GETCH_ESCSEQ
+    int csi_seen;
+    int qmark_seen;
+    int params[TEXTIO_MAX_ESC_PARAMS];
+    int num_params;
+    char code;
+    
+    //Used when type = TEXTIO_GETCH_MOUSE
     int btn; //One of the constants in the above enum
     int shift;
     int meta;
     int ctrl;
     int x;
     int y;
+    
+    //For error reporting
     char *error_str;
     char smoking_gun;
     char expected;
-} btn_info;
+} textio_input;
 
-//Some error messages
+//Maintains internal state machine. Uses input char to advance state machine,
+//returning 0 on succesful acceptance, and returning 1 if no error occurred but
+//the state machine is not finished yet.
+//On error, returns -1. When this happens, the state machine resets itself and
+//an error code is returned in res. Use textio_strerror to get the associated
+//printable string
+int textio_getch_cr(char c, textio_input *res);
+
+
+//Error codes, which double as printable strings
 extern char *TEXTIO_SUCC;
 extern char *TEXTIO_UNEX; //Kind of a catch-all, but whatever
 extern char *TEXTIO_BADX;
 extern char *TEXTIO_BADY;
 extern char *TEXTIO_BADB;
+extern char *TEXTIO_UNICODE_TOO_LONG;
+extern char *TEXTIO_UNICODE_UNEX;
+extern char *TEXTIO_UNICODE_CONT_EXP;
+extern char *TEXTIO_BAD_FN_KEY_CODE;
+extern char *TEXTIO_BAD_ESCAPE_CODE;
+extern char *TEXTIO_TOO_MANY_PARAMS;
+extern char *TEXTIO_IMPOSSIBLE;
 
-//Maintains internal state machine. Uses input char to advance state machine,
-//returning 0 on succesful acceptance, and returning 1 if no error occurred but
-//the state machine is not finished yet.
-//On error, sets btn->error_str, btn->expected, and btn->smoking_gun and 
-//returns -1
-//Pass NULL for either int to ignore that parameter
-int parse_mouse_cr(char c, btn_info *btn);
+//Names of special keys
+#define GETCH_IDENTS \
+    X(TEXTIO_KEY_UP), \
+    X(TEXTIO_KEY_DOWN), \
+    X(TEXTIO_KEY_LEFT), \
+    X(TEXTIO_KEY_RIGHT), \
+    X(TEXTIO_KEY_F1), \
+    X(TEXTIO_KEY_F2), \
+    X(TEXTIO_KEY_F3), \
+    X(TEXTIO_KEY_F4), \
+    X(TEXTIO_KEY_F5), \
+    X(TEXTIO_KEY_F6), \
+    X(TEXTIO_KEY_F7), \
+    X(TEXTIO_KEY_F8), \
+    X(TEXTIO_KEY_F9), \
+    X(TEXTIO_KEY_F10) \
+
+#define BTN_IDENTS \
+    X(TEXTIO_LMB), /*Left mouse button*/ \
+    X(TEXTIO_RMB), \
+    X(TEXTIO_MMB), \
+    X(TEXTIO_NOB), \
+    X(TEXTIO_MVT), /*movement*/ \
+    X(TEXTIO_WUP), /*mouse wheel up*/ \
+    X(TEXTIO_WDN)
+
 
 #endif

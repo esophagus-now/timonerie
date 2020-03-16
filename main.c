@@ -10,6 +10,9 @@
 #include <errno.h>
 #include <sched.h>
 #include <string.h>
+#include <stdio.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 #include "queue.h"
 #include "textio.h"
 
@@ -328,6 +331,13 @@ int main(int argc, char **argv) {
                 pthread_cancel(prod);
                 pthread_cancel(net_prod);
                 break;
+            } else if (c == '/') {
+                pthread_mutex_lock(&q.mutex);
+                char *l = readline("Enter a line: ");
+                pthread_mutex_unlock(&q.mutex);
+                cursor_pos(1,4);
+                sprintf(line, "You entered: %s%n", l, &len);  
+                write(1, line, len);  
             } else if (c == '\x1b') {
                 state = MOUSE;
             } else {

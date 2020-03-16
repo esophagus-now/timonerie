@@ -1,5 +1,5 @@
 main: main.c queue.h queue.c textio.h textio.c
-	gcc -g -o main -Wall -fno-diagnostics-show-caret main.c queue.c textio.c -lpthread
+	gcc -g -o main -Wall -fno-diagnostics-show-caret main.c queue.c textio.c -lpthread -lreadline
 
 clean:
 	rm -rf main
