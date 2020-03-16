@@ -29,20 +29,18 @@
 #define BOX_BR   '+'
 #define BOX_TL   '+'
 
-void cursor_pos(int x, int y);
+/////////////////////////////////////////////////////
+//Constants and printable strings for mouse buttons//
+/////////////////////////////////////////////////////
+#define BTN_IDENTS \
+    X(TEXTIO_LMB), /*Left mouse button*/ \
+    X(TEXTIO_RMB), \
+    X(TEXTIO_MMB), \
+    X(TEXTIO_NOB), \
+    X(TEXTIO_MVT), /*movement*/ \
+    X(TEXTIO_WUP), /*mouse wheel up*/ \
+    X(TEXTIO_WDN)
 
-//Writes command into buf, returns number of bytes written
-int cursor_pos_cmd(char *buf, int x, int y);
-
-void term_init();
-
-void enter_type_mode();
-
-void exit_type_mode();
-
-void clean_screen();
-
-//Constants and printable strings for mouse buttons
 #define X(x) x
 enum btn_consts {
     BTN_IDENTS
@@ -51,16 +49,36 @@ enum btn_consts {
 
 extern char *BUTTON_NAMES[];
 
-//Constants and printable strings for cursor/function keys
+////////////////////////////////////////////////////////////
+//Constants and printable strings for cursor/function keys//
+////////////////////////////////////////////////////////////
+#define GETCH_IDENTS \
+    X(TEXTIO_KEY_UP), \
+    X(TEXTIO_KEY_DOWN), \
+    X(TEXTIO_KEY_LEFT), \
+    X(TEXTIO_KEY_RIGHT), \
+    X(TEXTIO_KEY_F1), \
+    X(TEXTIO_KEY_F2), \
+    X(TEXTIO_KEY_F3), \
+    X(TEXTIO_KEY_F4), \
+    X(TEXTIO_KEY_F5), \
+    X(TEXTIO_KEY_F6), \
+    X(TEXTIO_KEY_F7), \
+    X(TEXTIO_KEY_F8), \
+    X(TEXTIO_KEY_F9), \
+    X(TEXTIO_KEY_F10) \
+
 #define X(x) x
 typedef enum _getch_fn_key_t {
     GETCH_IDENTS
 } getch_fn_key_t;
 #undef X
-
 extern char *FN_KEY_NAMES[];
 
-//When reading a "char" from the input, it could be any one of these things:
+///////////////////////////////////////////
+//structs and enums for textio_getch_cr()//
+///////////////////////////////////////////
+
 typedef enum _getch_type {
     TEXTIO_GETCH_PLAIN,
     TEXTIO_GETCH_WIDE, //For multi-byte unicode characters
@@ -104,6 +122,19 @@ typedef struct _textio_input{
     char expected;
 } textio_input;
 
+//////////////
+//Prototypes//
+//////////////
+
+void cursor_pos(int x, int y);
+
+//Writes command into buf, returns number of bytes written
+int cursor_pos_cmd(char *buf, int x, int y);
+
+void term_init();
+
+void clean_screen();
+
 //Maintains internal state machine. Uses input char to advance state machine,
 //returning 0 on succesful acceptance, and returning 1 if no error occurred but
 //the state machine is not finished yet.
@@ -112,8 +143,9 @@ typedef struct _textio_input{
 //printable string
 int textio_getch_cr(char c, textio_input *res);
 
-
-//Error codes, which double as printable strings
+//////////////////////////////////////////////////
+//Error codes, which double as printable strings//
+//////////////////////////////////////////////////
 extern char *TEXTIO_SUCC;
 extern char *TEXTIO_UNEX; //Kind of a catch-all, but whatever
 extern char *TEXTIO_BADX;
@@ -126,32 +158,5 @@ extern char *TEXTIO_BAD_FN_KEY_CODE;
 extern char *TEXTIO_BAD_ESCAPE_CODE;
 extern char *TEXTIO_TOO_MANY_PARAMS;
 extern char *TEXTIO_IMPOSSIBLE;
-
-//Names of special keys
-#define GETCH_IDENTS \
-    X(TEXTIO_KEY_UP), \
-    X(TEXTIO_KEY_DOWN), \
-    X(TEXTIO_KEY_LEFT), \
-    X(TEXTIO_KEY_RIGHT), \
-    X(TEXTIO_KEY_F1), \
-    X(TEXTIO_KEY_F2), \
-    X(TEXTIO_KEY_F3), \
-    X(TEXTIO_KEY_F4), \
-    X(TEXTIO_KEY_F5), \
-    X(TEXTIO_KEY_F6), \
-    X(TEXTIO_KEY_F7), \
-    X(TEXTIO_KEY_F8), \
-    X(TEXTIO_KEY_F9), \
-    X(TEXTIO_KEY_F10) \
-
-#define BTN_IDENTS \
-    X(TEXTIO_LMB), /*Left mouse button*/ \
-    X(TEXTIO_RMB), \
-    X(TEXTIO_MMB), \
-    X(TEXTIO_NOB), \
-    X(TEXTIO_MVT), /*movement*/ \
-    X(TEXTIO_WUP), /*mouse wheel up*/ \
-    X(TEXTIO_WDN)
-
 
 #endif

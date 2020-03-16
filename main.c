@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
     
     int state = NORMAL;
     
-    btn_info btn;
+    //btn_info btn;
     
     while(1) {
         int rc;
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
                 cursor_pos(1,4);
                 sprintf(line, "You entered: %s%n", l, &len);  
                 write(1, line, len);  
-            } else if (c == '\x1b') {
+            } /*else if (c == '\x1b') {
                 state = MOUSE;
             } else {
                 cursor_pos(0,1);
@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
                 sprintf(line, "Could not parse mouse: %s%n", btn.error_str, &len);
                 write(1, line, len);
                 state = NORMAL;
-            }
+            }*/
         }
         
         sched_yield();

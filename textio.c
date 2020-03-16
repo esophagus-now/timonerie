@@ -6,10 +6,12 @@
 #include "queue.h"
 #include "coroutine.h"
 
+//These variables hang onto the old tty state so we can return to it when 
+//quitting
 static int changed = 0;
 static struct termios old;
 
-
+//These are used if you want to print out an enum value
 #define X(x) #x
 char *BUTTON_NAMES[] = {
     BTN_IDENTS
@@ -22,7 +24,7 @@ char *FN_KEY_NAMES[] = {
 };
 #undef X
 
-//Mouse parse error messages
+//Printable error messages
 char *TEXTIO_SUCC = "success";
 char *TEXTIO_UNEX = "unexpected character"; //Kind of a catch-all, but whatever
 char *TEXTIO_BADX = "invalid X coordinate";
@@ -80,115 +82,27 @@ void clean_screen() {
     }
 }
 
-//Maintains internal state machine. Uses input char to advance state machine,
-//returning 0 on succesful acceptance, and returning 1 if no error occurred but
-//the state machine is not finished yet.
-//On error, sets btn->error_str, btn->expected, and btn->smoking_gun and 
-//returns -1
-int parse_mouse_cr(char c, btn_info *btn) {
-    scrBegin;
-    
-    btn->shift = 0;
-    btn->meta = 0;
-    btn->ctrl = 0;
-    btn->error_str = TEXTIO_SUCC;
-    
-    if (c != '[') {
-        btn->error_str = TEXTIO_UNEX;
-        btn->expected = '[';
-        btn->smoking_gun = c;
-        scrResetReturn(-1);
-    }
-    
-    scrReturn(1); //We are finished with c, but the coroutine is not finished
-    
-    if (c != 'M') {
-        btn->error_str = TEXTIO_UNEX;
-        btn->expected = 'M';
-        btn->smoking_gun = c;
-        scrResetReturn(-1);
-    }
-    
-    scrReturn(1); //We are finished with c, but the coroutine is not finished
-    
-    //C contains the button code
-    if (c < 32) {
-        btn->error_str = TEXTIO_BADB;
-        btn->smoking_gun = c;
-        scrResetReturn(-1);
-    }
-    
-    if (c >= 64 && c < 96) btn->btn = TEXTIO_MVT;
-    
-    if (c & 0b100) btn->shift = 1;
-    
-    if (c & 0b1000) btn->meta = 1;
-    
-    if (c & 0b10000) btn->ctrl = 1;
-    
-    if (c < 92) {
-        switch(c&11) {
-        case 0b00:
-            btn->btn = TEXTIO_LMB;
-            break;
-        case 0b01:
-            btn->btn = TEXTIO_MMB;
-            break;
-        case 0b10:
-            btn->btn = TEXTIO_RMB;
-            break;
-        case 0b11:
-            btn->btn = TEXTIO_NOB;
-            break;
-        }
-    } else {
-        switch (c & 0b01100001) {
-        case 0b1100000:
-            btn->btn = TEXTIO_WUP;
-            break;
-        case 0b1100001:
-            btn->btn = TEXTIO_WDN;
-            break;
-        }
-    }
-    
-    scrReturn(1); //We are finished with c, but the coroutine is not finished
-    
-    //Read x and y    
-    if (c < 32) {
-        btn->error_str = TEXTIO_BADX;
-        scrResetReturn(-1);
-    }
-    btn->x = c - 32;
-    scrReturn(1); //We are finished with c, but the coroutine is not finished
-    
-    if (c < 32) {
-        btn->error_str = TEXTIO_BADY;
-        scrResetReturn(-1);
-    }
-    btn->y = c - 32;
-    
-    scrResetReturn(0);
-    
-    //We should never get here...
-    scrFinish(-1);
-}
-
-static int parse_mouse_button(char c, textio_input *res) {    
+//Helper function to interpret the button-press char
+static int parse_mouse_button(char c, textio_input *res) {   
+    //The button-press char is never less than 32 
     if (c < 32) {
         res->error_str = TEXTIO_BADB;
         res->smoking_gun = c;
         return -1;
     }
     
+    //This means that the mouse was moved
     if (c >= 64 && c < 96) res->btn = TEXTIO_MVT;
     
+    //These bits are set if you are holding the ctrl/shift/alt keys
     if (c & 0b100) res->shift = 1;
     
     if (c & 0b1000) res->meta = 1;
     
     if (c & 0b10000) res->ctrl = 1;
     
+    //What a mess... if less than 92, it measn a simple mouse button, otherwise
+    //the scroll wheel was spun
     if (c < 92) {
         switch(c&11) {
         case 0b00:
@@ -219,7 +133,8 @@ static int parse_mouse_button(char c, textio_input *res) {
         }
     }
     
-    return 0;
+    res->error_str = TEXTIO_IMPOSSIBLE;
+    return -1;
 }
 
 //Maintains internal state machine. Uses input char to advance state machine,
