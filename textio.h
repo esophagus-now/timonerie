@@ -42,9 +42,9 @@
     X(TEXTIO_WDN)
 
 #define X(x) x
-enum btn_consts {
+typedef enum _btn_const {
     BTN_IDENTS
-};
+} btn_const;
 #undef X
 
 extern char *BUTTON_NAMES[];
@@ -66,7 +66,11 @@ extern char *BUTTON_NAMES[];
     X(TEXTIO_KEY_F7), \
     X(TEXTIO_KEY_F8), \
     X(TEXTIO_KEY_F9), \
-    X(TEXTIO_KEY_F10) \
+    X(TEXTIO_KEY_F10), \
+    X(TEXTIO_KEY_INSERT), \
+    X(TEXTIO_KEY_PGUP), \
+    X(TEXTIO_KEY_PGDOWN), \
+    X(TEXTIO_KEY_DEL) \
 
 #define X(x) x
 typedef enum _getch_fn_key_t {
@@ -96,7 +100,7 @@ typedef struct _textio_input{
     char c; 
     
     //Used when type = TEXTIO_GETCH_WIDE
-    int wc; 
+    unsigned wc; 
     
     //Used when type = TEXTIO_GETCH_FN_KEY
     getch_fn_key_t key; 
@@ -109,7 +113,7 @@ typedef struct _textio_input{
     char code;
     
     //Used when type = TEXTIO_GETCH_MOUSE
-    int btn; //One of the constants in the above enum
+    btn_const btn;
     int shift;
     int meta;
     int ctrl;
@@ -158,5 +162,7 @@ extern char *TEXTIO_BAD_FN_KEY_CODE;
 extern char *TEXTIO_BAD_ESCAPE_CODE;
 extern char *TEXTIO_TOO_MANY_PARAMS;
 extern char *TEXTIO_IMPOSSIBLE;
+extern char *TEXTIO_BAD_TILDE_CODE;
+extern char *TEXTIO_BAD_MODIFIER_CODE;
 
 #endif
