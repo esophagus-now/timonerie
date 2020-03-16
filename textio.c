@@ -136,6 +136,7 @@ static int parse_mouse_button(char c, textio_input *res) {
     }
     
     res->error_str = TEXTIO_IMPOSSIBLE;
+    res->smoking_gun = 24;
     return -1;
 }
 
@@ -256,39 +257,88 @@ static int convert_csi_fn_key(textio_input *res) {
     //If it turns out someone uses it, I can add support for ^[[#A for #
     //repeated cursor up movements (and likewise for the other directions)
     
-    if (c == 'A') {
+    char c = res->code;
+    
+    switch (c) {
+    case 'A':
         //Up arrow
         res->type = TEXTIO_GETCH_FN_KEY;
         res->key = TEXTIO_KEY_UP;
         if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
         return 0;
-    } else if (c == 'B') {
+    case 'B':
         //Down arrow
-        
-    } else if (c == 'C') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_DOWN;
+        if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
+        return 0;
+    case 'C':
         //Right arrow
-        
-    } else if (c == 'D') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_LEFT;
+        if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
+        return 0;
+    case 'D':
         //Left arrow
-        
-    } else if (c == 'P') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_RIGHT;
+        if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
+        return 0;
+    case 'P':
         //Could be F1???
-        
-    } else if (c == 'Q') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_F1;
+        if (res->num_params == 2) {
+            return parse_modifier_code(res->params[1], res);
+        } else {
+            res->error_str = TEXTIO_UNEX;
+            return -1; //This is probably bad news
+        }
+    case 'Q':
         //Could be F2???
-        
-    } else if (c == 'R') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_F2;
+        if (res->num_params == 2) {
+            return parse_modifier_code(res->params[1], res);
+        } else {
+            res->error_str = TEXTIO_UNEX;
+            return -1; //This is probably bad news
+        }
+    case 'R':
         //Could be F3???
-        
-    } else if (c == 'S') {
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_F3;
+        if (res->num_params == 2) {
+            return parse_modifier_code(res->params[1], res);
+        } else {
+            res->error_str = TEXTIO_UNEX;
+            return -1; //This is probably bad news
+        }
+    case 'S':
         //Could be F4???
+        res->type = TEXTIO_GETCH_FN_KEY;
+        res->key = TEXTIO_KEY_F4;
+        if (res->num_params == 2) {
+            return parse_modifier_code(res->params[1], res);
+        } else {
+            res->error_str = TEXTIO_UNEX;
+            return -1; //This is probably bad news
+        }
         
-    } 
+    default:
+        //Not one of the special cases for function keys. Leave as-is
+        return 0;
+        
+    }
+    
+    res->error_str = TEXTIO_IMPOSSIBLE;
+    res->smoking_gun = 11;
+    return -1;
 }
 
 //Maintains internal state machine. Uses input char to advance state machine,
-//returning 0 on succesful acceptance, and returning 1 if no error occurred but
-//the state machine is not finished yet.
+//returning 0 on succesful acceptance, and returning positive if no error 
+//occurred but the state machine is not finished yet.
 //On error, returns -1. When this happens, the state machine resets itself and
 //an error code is returned in res->error_str (which can also be printed)
 int textio_getch_cr(char c, textio_input *res) {
@@ -319,9 +369,11 @@ int textio_getch_cr(char c, textio_input *res) {
         
     scrBegin;
     static int count; //When parsing unicode; how many continuation chars left
+    static int wc_pos; //Position into the unicode character string
     static int parsed_num; //When parsing integers in escape sequences
     
     //Some of the code below expects initialized values in the struct
+    res->wc[5] = 0; //NUL-terminate unicode char string
     res->csi_seen = 0;
     res->qmark_seen = 0;
     res->num_params = 0;
@@ -334,7 +386,7 @@ int textio_getch_cr(char c, textio_input *res) {
     
     //Get to work on tokenizing this input!
     
-    if (c < 0x80 || c != '\x1b') { //This is a simple ASCII char
+    if ((unsigned) c < 0x80 && c != '\x1b') { //This is a simple ASCII char
         res->type = TEXTIO_GETCH_PLAIN;
         res->c = c;
         //Done; restart the state machine
@@ -345,22 +397,32 @@ int textio_getch_cr(char c, textio_input *res) {
         //might change this type later.
         scrReturn(1);
         goto escape_seq;
-    } else {
-        res->type = TEXTIO_GETCH_WIDE;
+    } else { //Unicode character
+        char saved_c = c;
+        res->type = TEXTIO_GETCH_UNICODE; 
+        //Count number of bytes in unicode char
         count = 0;
-        while ((c <<= 1) & 0x80) count++; //Count number of remaining bytes
+        while (c & 0x80) {
+            c <<= 1;
+            count++;
+        }
+        res->unicode_len = count;
         
         //Check if this Unicode character follows our rules for byte lengths
         if (count == 0) {
             res->error_str = TEXTIO_UNICODE_UNEX;
-            res->smoking_gun = c;
+            res->smoking_gun = saved_c;
             scrResetReturn(-1);
-        } else if (count > 3) {
+        } else if (count > 4) {
             res->error_str = TEXTIO_UNICODE_TOO_LONG;
-            res->smoking_gun = c;
+            res->smoking_gun = saved_c;
             scrResetReturn(-1);
         }
         
+        res->wc[count] = 0; //NUL-terminator. Note that wc is defined as char[5]
+        
+        wc_pos = 0; //This is one of this function's static variables
+        res->wc[wc_pos++] = saved_c;
         scrReturn(1);
         goto unicode_char;
     }
@@ -407,7 +469,8 @@ escape_seq:
         scrResetReturn(return_code);
     } else if (c == '[') { //This is a control sequence
         res->csi_seen = 1;
-        scrResetReturn(1);
+        //Keep reading more input
+        scrReturn(1);
         goto csi_seq;
     } else if (isprint(c)) { //This is a regular escape with just ^[ and a single char
         res->code = c;
@@ -457,8 +520,10 @@ csi_seq:
             scrResetReturn(rc);
         } else if (isprint(c)) {
             res->code = c;
+            //Check for special cases
+            int rc = convert_csi_fn_key(res);
             //Done; reset state machine
-            scrResetReturn(0);
+            scrResetReturn(rc);
         }
     }
     
@@ -507,6 +572,24 @@ mouse_seq:
     scrResetReturn(-1);
 
 unicode_char:
+
+    //Read in all continuation bytes
+    while (wc_pos < res->unicode_len) {
+        //Check if this is a valid continuation byte
+        if ((c & 0b11000000) != 0b10000000) {
+            res->error_str = TEXTIO_UNICODE_CONT_EXP;
+            res->smoking_gun = c;
+            scrResetReturn(-1);
+        }
+        res->wc[wc_pos++] = c;
+        if (wc_pos == res->unicode_len) {
+            //Thsi is the last byte. Signal that we're done.
+            scrResetReturn(0); 
+        } else {
+            //Need more bytes
+            scrReturn(1);
+        }
+    }
     
     //We should never get here
     res->error_str = TEXTIO_IMPOSSIBLE;

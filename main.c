@@ -249,7 +249,7 @@ int redraw_dbg_guv(dbg_guv *g, char *buf) {
     return bytes;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) {    
     atexit(clean_screen);
     term_init();
     
@@ -284,12 +284,7 @@ int main(int argc, char **argv) {
     g->x = 5;
     g->y = 7;
     
-    #define NORMAL 0
-    #define MOUSE 1
-    
-    int state = NORMAL;
-    
-    //btn_info btn;
+    textio_input in;
     
     while(1) {
         int rc;
@@ -319,65 +314,59 @@ int main(int argc, char **argv) {
             continue;
         } else if (rc < 0) {
             cursor_pos(0,0);
-            sprintf(line, "Error reading from queue. Quitting...%n", &len);
+            sprintf(line, "Error reading from queue. Quitting..." ERASE_TO_END "%n", &len);
             write(1, line, len);
             pthread_cancel(prod);
             break;
         }
         
-        if (state == NORMAL) {
-            //If user pressed ~ we can quit
-            if (c == '~') {
-                pthread_cancel(prod);
-                pthread_cancel(net_prod);
-                break;
-            } else if (c == '/') {
-                pthread_mutex_lock(&q.mutex);
-                char *l = readline("Enter a line: ");
-                pthread_mutex_unlock(&q.mutex);
-                cursor_pos(1,4);
-                sprintf(line, "You entered: %s%n", l, &len);  
-                write(1, line, len);  
-            } /*else if (c == '\x1b') {
-                state = MOUSE;
-            } else {
-                cursor_pos(0,1);
-                int tmp;
-                sprintf(line, "You pressed 0x%02x%n", c & 0xFF, &tmp);
-                len = tmp;
-                if (isprint(c)) {
-                    sprintf(line + len, " = '%c'%n", c, &tmp);
-                    len += tmp;
-                } else {
-                    sprintf(line + len, "       %n", &tmp);
-                    len += tmp;
+        //If user pressed ~ (but not as part of escape sequence) we can quit
+        if (c == '~') {
+            pthread_cancel(prod);
+            pthread_cancel(net_prod);
+            break;
+        } /*else if (c == '/') {
+            pthread_mutex_lock(&q.mutex);
+            char *l = readline("Enter a line: ");
+            pthread_mutex_unlock(&q.mutex);
+            cursor_pos(1,4);
+            sprintf(line, "You entered: %s" ERASE_TO_END "%n", l, &len);  
+            write(1, line, len);  
+        } */ else {
+            int rc = textio_getch_cr(c, &in);
+            if (rc == 0) {
+                cursor_pos(1,1);
+                switch(in.type) {
+                case TEXTIO_GETCH_PLAIN:
+                    sprintf(line, "You entered: 0x%02x" ERASE_TO_END "%n", in.c & 0xFF, &len);
+                    break;
+                case TEXTIO_GETCH_UNICODE:
+                    sprintf(line, "You entered: %s" ERASE_TO_END "%n", in.wc, &len);
+                    break;
+                case TEXTIO_GETCH_FN_KEY:
+                    sprintf(line, "You entered: %s" ERASE_TO_END "%n", FN_KEY_NAMES[in.key], &len);
+                    break;
+                case TEXTIO_GETCH_ESCSEQ:
+                    sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
+                    break;
+                case TEXTIO_GETCH_MOUSE:
+                    sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 
+                        in.shift ? "(shift)" : "", 
+                        in.meta ? "(alt)" : "", 
+                        in.ctrl ? "(ctrl)" : "", 
+                        BUTTON_NAMES[in.btn],
+                        in.x,
+                        in.y,
+                        &len);
+                    break;
                 }
+                cursor_pos(1,5);
+                write(1, line, len);
+            } else if (rc < 0) {
+                cursor_pos(1,5);
+                sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x" ERASE_TO_END "%n", in.error_str, in.smoking_gun & 0xFF, &len);
                 write(1, line, len);
             }
-        } else if (state == MOUSE) {
-            rc = parse_mouse_cr(c, &btn);
-            if (rc > 0) {
-                sched_yield();
-                continue;
-            } else if (rc == 0) {
-                sprintf(line, "%s%s%s%s at %d %d%n", 
-                    btn.shift ? "(shift)" : "",
-                    btn.meta ? "(meta)" : "",
-                    btn.ctrl ? "(ctrl)" : "",
-                    BUTTON_NAMES[btn.btn],
-                    btn.x,
-                    btn.y,
-                    &len
-                );
-                cursor_pos(0,2);
-                write(1, line, len);
-                state = NORMAL;
-            } else {
-                cursor_pos(0,2);
-                sprintf(line, "Could not parse mouse: %s%n", btn.error_str, &len);
-                write(1, line, len);
-                state = NORMAL;
-            }*/
         }
         
         sched_yield();

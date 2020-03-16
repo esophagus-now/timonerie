@@ -16,6 +16,8 @@
 #define ERASE_ALL "\x1b[2J"
 #define LEN_ERASE_ALL 4
 
+#define ERASE_TO_END CSI "K"
+
 #define REPORT_CURSOR_ON "\x1b[?1003h"
 #define LEN_REPORT_CURSOR_ON 8
 
@@ -85,7 +87,7 @@ extern char *FN_KEY_NAMES[];
 
 typedef enum _getch_type {
     TEXTIO_GETCH_PLAIN,
-    TEXTIO_GETCH_WIDE, //For multi-byte unicode characters
+    TEXTIO_GETCH_UNICODE, //For multi-byte unicode characters
     TEXTIO_GETCH_FN_KEY, //If an arrow or Fn key was pressed
     TEXTIO_GETCH_ESCSEQ,
     TEXTIO_GETCH_MOUSE //If a mouse sequence was parsed
@@ -99,8 +101,9 @@ typedef struct _textio_input{
     //Used when type = TEXTIO_GETCH_PLAIN
     char c; 
     
-    //Used when type = TEXTIO_GETCH_WIDE
-    unsigned wc; 
+    //Used when type = TEXTIO_GETCH_UNICODE
+    int unicode_len;
+    char wc[5]; 
     
     //Used when type = TEXTIO_GETCH_FN_KEY
     getch_fn_key_t key; 
@@ -140,11 +143,10 @@ void term_init();
 void clean_screen();
 
 //Maintains internal state machine. Uses input char to advance state machine,
-//returning 0 on succesful acceptance, and returning 1 if no error occurred but
-//the state machine is not finished yet.
+//returning 0 on succesful acceptance, and returning positive if no error 
+//occurred but the state machine is not finished yet.
 //On error, returns -1. When this happens, the state machine resets itself and
-//an error code is returned in res. Use textio_strerror to get the associated
-//printable string
+//an error code is returned in res->error_str (which can also be printed)
 int textio_getch_cr(char c, textio_input *res);
 
 //////////////////////////////////////////////////
