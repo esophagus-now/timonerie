@@ -106,7 +106,7 @@ static int parse_mouse_button(char c, textio_input *res) {
     //What a mess... if less than 92, it measn a simple mouse button, otherwise
     //the scroll wheel was spun
     if (c < 92) {
-        switch(c&11) {
+        switch(c&0b11) {
         case 0b00:
             res->btn = TEXTIO_LMB;
             return 0;
