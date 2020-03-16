@@ -371,6 +371,7 @@ int textio_getch_cr(char c, textio_input *res) {
     static int count; //When parsing unicode; how many continuation chars left
     static int wc_pos; //Position into the unicode character string
     static int parsed_num; //When parsing integers in escape sequences
+    static int parsed_num_dirty; //If nonzero, it means we read in a few digits
     
     //Some of the code below expects initialized values in the struct
     res->wc[5] = 0; //NUL-terminate unicode char string
@@ -441,7 +442,7 @@ escape_seq:
         //Start by setting the type and returning 1 (to indicate that we need 
         //another character)
         res->type = TEXTIO_GETCH_FN_KEY;
-        scrResetReturn(1);
+        scrReturn(1);
         
         //Now finish off parsing the Fn key.
         int return_code = 0;
@@ -506,19 +507,36 @@ csi_seq:
         if (isdigit(c)) { //This char part of a numerical parameter
             parsed_num *= 10;
             parsed_num += (c - '0');
+            parsed_num_dirty = 1;
+            //Move on to the next character
+            scrReturn(1);
         } else if (c == ';') {
             res->params[res->num_params++] = parsed_num;
             parsed_num = 0;
+            parsed_num_dirty = 0;
             if (res->num_params == TEXTIO_MAX_ESC_PARAMS) {
                 res->error_str = TEXTIO_TOO_MANY_PARAMS;
+                res->smoking_gun = res->num_params;
                 scrResetReturn(-1);
             }
+            //Move on to the next character
+            scrReturn(1);
         } else if (c == '~') {
+            if (parsed_num_dirty) {
+                res->params[res->num_params++] = parsed_num;
+                parsed_num = 0;
+                parsed_num_dirty = 0;
+            }
             //This is a function key.
             res->type = TEXTIO_GETCH_FN_KEY;
             int rc = parse_tilde_sequence(res);
             scrResetReturn(rc);
         } else if (isprint(c)) {
+            if (parsed_num_dirty) {
+                res->params[res->num_params++] = parsed_num;
+                parsed_num = 0;
+                parsed_num_dirty = 0;
+            }
             res->code = c;
             //Check for special cases
             int rc = convert_csi_fn_key(res);

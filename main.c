@@ -301,6 +301,7 @@ int main(int argc, char **argv) {
             if (c == '\n' || net_data_pos == NET_DATA_MAX - 1) {
                 cursor_pos(0,5);
                 write(1, net_data, net_data_pos);
+                write(1, ERASE_TO_END, sizeof(ERASE_TO_END));
                 net_data_pos = 0;
             }
         }   
@@ -320,8 +321,8 @@ int main(int argc, char **argv) {
             break;
         }
         
-        //If user pressed ~ (but not as part of escape sequence) we can quit
-        if (c == '~') {
+        //If user pressed \ we can quit
+        if (c == '\\') {
             pthread_cancel(prod);
             pthread_cancel(net_prod);
             break;
@@ -335,16 +336,30 @@ int main(int argc, char **argv) {
         } */ else {
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
-                cursor_pos(1,1);
                 switch(in.type) {
-                case TEXTIO_GETCH_PLAIN:
-                    sprintf(line, "You entered: 0x%02x" ERASE_TO_END "%n", in.c & 0xFF, &len);
+                case TEXTIO_GETCH_PLAIN: {
+                    int tmp;
+                    sprintf(line, "You entered: 0x%02x%n", in.c & 0xFF, &tmp);
+                    len = tmp;
+                    if (isprint(in.c)) {
+                        sprintf(line + tmp, " = \'%c\'" ERASE_TO_END "%n", in.c, &tmp);
+                        len += tmp;
+                    } else {
+                        sprintf(line + tmp, " = <?>" ERASE_TO_END "%n", &tmp);
+                        len += tmp;
+                    }
                     break;
-                case TEXTIO_GETCH_UNICODE:
+                } case TEXTIO_GETCH_UNICODE:
                     sprintf(line, "You entered: %s" ERASE_TO_END "%n", in.wc, &len);
                     break;
                 case TEXTIO_GETCH_FN_KEY:
-                    sprintf(line, "You entered: %s" ERASE_TO_END "%n", FN_KEY_NAMES[in.key], &len);
+                    sprintf(line, "You entered: %s%s%s%s" ERASE_TO_END "%n", 
+                        in.shift ? "(shift)" : "", 
+                        in.meta ? "(alt)" : "", 
+                        in.ctrl ? "(ctrl)" : "", 
+                        FN_KEY_NAMES[in.key], 
+                        &len
+                    );
                     break;
                 case TEXTIO_GETCH_ESCSEQ:
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
@@ -360,7 +375,7 @@ int main(int argc, char **argv) {
                         &len);
                     break;
                 }
-                cursor_pos(1,5);
+                cursor_pos(1,1);
                 write(1, line, len);
             } else if (rc < 0) {
                 cursor_pos(1,5);
