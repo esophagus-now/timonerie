@@ -126,9 +126,32 @@ void* get_net(void *v) {
     return NULL;
 }
 
+fpga_connection_info *f = NULL;
+dbg_guv *g = NULL;
+
+void got_rl_line(char *str) {
+    cursor_pos(1,2);
+    char line[80];
+    int len;
+    sprintf(line, "Read line: %s" ERASE_TO_END "%n", str, &len);
+    write(1, line, len);
+    if (f != NULL) append_log(f, 0, str);
+    else free(str);
+    if (g != NULL) g->need_redraw = 1;
+}
+
+enum {
+    NORMAL,
+    READLINE
+};
+
+int mode = NORMAL;
+
 int main(int argc, char **argv) {    
     atexit(clean_screen);
     term_init();
+    
+    init_readline(got_rl_line);
     
     queue q = QUEUE_INITIALIZER;
     
@@ -157,25 +180,33 @@ int main(int argc, char **argv) {
     char net_data[NET_DATA_MAX + 1];
     int net_data_pos = 0;
     
-    fpga_connection_info *f = new_fpga_connection(NULL, NULL);
+    f = new_fpga_connection(NULL, NULL);
     
-    dbg_guv *g = new_dbg_guv(NULL);
+    g = new_dbg_guv(NULL);
     g->x = 5;
     g->y = 7;
-    g->w = 15;
+    g->w = 25;
     g->h = 7;
     g->parent = f;
     g->addr = 0;
     
+    
+        
+    char line[1024];
+    int len = 0;
+    
     textio_input in;
+    
+    int status_drawn = 0;
+    //Draw "status bar"
+    cursor_pos(1, term_rows);
+    sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
+    write(1, line, len);
+    status_drawn = 1;
     
     while(1) {
         int rc;
-        char c;
-        
-        char line[1024];
-        int len = 0;
-        
+        char c;        
         
         while(nb_dequeue_single(&netq, &c) == 0) {
             if (c != '\n') net_data[net_data_pos++] = c;
@@ -193,7 +224,13 @@ int main(int argc, char **argv) {
         }   
         
         len = draw_dbg_guv(g, line);
-        if (len > 0) write(1, line, len);
+        if (len > 0) {
+            write(1, line, len);
+            if (mode == READLINE) {
+                //Put cursor in the right place
+                place_readline_cursor();
+            }
+        }
         
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
@@ -210,12 +247,25 @@ int main(int argc, char **argv) {
             break;
         }
         
+        //Draw "status bar"
+        if (mode == NORMAL && !status_drawn) {
+            cursor_pos(1, term_rows);
+            sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
+            write(1, line, len);
+            status_drawn = 1;
+        }
+            
+        
         //If user pressed CTRL-D we can quit
         if (c == '\x04') {
             pthread_cancel(prod);
             pthread_cancel(net_prod);
             break;
         } else {
+            if (mode == READLINE) {
+                forward_to_readline(c);
+                if (c == '\n') mode = NORMAL; //Exit readline mode on ESC?
+            }
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
                 switch(in.type) {
@@ -229,6 +279,12 @@ int main(int argc, char **argv) {
                     } else {
                         sprintf(line + tmp, " = <?>" ERASE_TO_END "%n", &tmp);
                         len += tmp;
+                    }        
+                    if (mode == NORMAL && in.c == ':') {
+                        mode = READLINE;
+                        readline_redisplay();
+                        status_drawn = 0;
+                        continue;
                     }
                     break;
                 } case TEXTIO_GETCH_UNICODE:
@@ -271,6 +327,10 @@ int main(int argc, char **argv) {
                 }
                 cursor_pos(1,1);
                 write(1, line, len);
+                if (mode == READLINE) {
+                    //Put cursor in the right place
+                    place_readline_cursor();
+                }
             } else if (rc < 0) {
                 cursor_pos(1,5);
                 sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x" ERASE_TO_END "%n", in.error_str, in.smoking_gun & 0xFF, &len);

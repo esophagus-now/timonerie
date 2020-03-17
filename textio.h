@@ -133,13 +133,16 @@ typedef struct _textio_input{
 //Prototypes//
 //////////////
 
+//TODO: make this less hacky
+extern int term_rows, term_cols;
+
 void cursor_pos(int x, int y);
 
 //Writes command into buf, returns number of bytes written
 int cursor_pos_cmd(char *buf, int x, int y);
 
-void term_init();
-
+//Returns 0 on success, -1 on error
+int term_init();
 void clean_screen();
 
 //Maintains internal state machine. Uses input char to advance state machine,
@@ -148,6 +151,16 @@ void clean_screen();
 //On error, returns -1. When this happens, the state machine resets itself and
 //an error code is returned in res->error_str (which can also be printed)
 int textio_getch_cr(char c, textio_input *res);
+
+typedef void (*readline_callback)(char *);
+
+//From https://github.com/ulfalizer/readline-and-ncurses/blob/master/rlncurses.c
+void forward_to_readline(char c);
+void readline_redisplay(void);
+void place_readline_cursor(void);
+//Returns -1 on error, 0 on success
+int init_readline(readline_callback cb);
+void deinit_readline(void);
 
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//

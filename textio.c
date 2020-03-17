@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <readline/readline.h>
+#include <signal.h> //To get access to SIGWINCH
+#include <unistd.h> //isatty
+#include <sys/ioctl.h> //ioctl, in order to get terminal size
 #include "textio.h"
 #include "queue.h"
 #include "coroutine.h"
@@ -10,6 +14,9 @@
 //quitting
 static int changed = 0;
 static struct termios old;
+
+//Keep track of width and heigh
+int term_rows, term_cols;
 
 //These are used if you want to print out an enum value
 #define X(x) #x
@@ -54,7 +61,30 @@ int cursor_pos_cmd(char *buf, int x, int y){
     return len;
 }
 
-void term_init() {
+volatile sig_atomic_t called = 0;
+
+static void get_term_sz() {
+    //From https://stackoverflow.com/questions/1022957/getting-terminal-width-in-c
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    
+    term_rows = w.ws_row;
+    term_cols = w.ws_col;
+    
+    called = 1;
+}
+
+//Returns 0 on success, -1 on error
+int term_init() {
+    //Check if we are outputting to a TTY
+    if (isatty(1) == 0) {
+        fprintf(stderr, "Cannot use fancy UI when not ouputting to a TTY\n");
+        return -1;
+    }
+    //Check if we have already init'd the term
+    if (changed) {
+        return 0;
+    }
     //Get current TTY attributes and save in old
     tcgetattr(0, &old);
     //Keep track of the fact that we are changing the tty settings
@@ -63,6 +93,20 @@ void term_init() {
     struct termios mod = old;
     mod.c_lflag &= (~ECHO & ~ICANON);
     tcsetattr(0, TCSANOW, &mod);
+    
+    //Set up a signal handler to catch window resizes
+    struct sigaction act;
+    sigemptyset(&act.sa_mask);
+    act.sa_handler = get_term_sz;
+    act.sa_flags = SA_RESTART;
+    
+    if (sigaction(SIGWINCH, &act, NULL) < 0) {
+        //Umm, I hope this never happens?
+        return -2;
+    }
+    
+    //Oh and get the size right now
+    get_term_sz();
     
     //Use the standard ANSI escape sequences to switch to the terminal's 
     //alternate buffer (so that we don't disturb the regular text output
@@ -73,6 +117,7 @@ void term_init() {
     write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
     
     cursor_pos(0,0);
+    return 0;
 }
 
 void clean_screen() {
@@ -81,8 +126,92 @@ void clean_screen() {
         write(1, REPORT_CURSOR_OFF, LEN_REPORT_CURSOR_OFF);
         tcsetattr(0, TCSANOW, &old);
         changed = 0;
+        printf("Called = %d\n", called);
     }
 }
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//Stolen from https://github.com/ulfalizer/readline-and-ncurses/blob/master/rlncurses.c//
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// Input character for readline
+static unsigned char input;
+
+// Used to signal "no more input" after feeding a character to readline
+static int input_avail = 0;
+
+// Not bothering with 'input_avail' and just returning 0 here seems to do the
+// right thing too, but this might be safer across readline versions
+static int readline_input_avail(void) {
+    return input_avail;
+}
+
+static int readline_getc(FILE *dummy) {
+    input_avail = 0;
+    return input;
+}
+
+void forward_to_readline(char c) {
+    input = c;
+    input_avail = 1;
+    rl_callback_read_char();
+}
+
+void readline_redisplay(void) {
+    //I use term_cols to allocate an array on the stack, so I want to make sure
+    //its value is sane
+    if (term_cols < 0 || term_cols > 200) return;
+    
+    cursor_pos(1,term_rows);
+    char line[term_cols]; 
+    int len;
+    
+    //Write the line to the correct place on the screen
+    sprintf(line, ": %-*.*s%n", term_cols-2, term_cols-2, rl_line_buffer, &len);
+    write(1, line, len);
+    
+    //Put cursor in the right place
+    cursor_pos(3+rl_point, term_rows);
+}
+
+void place_readline_cursor(void) {
+    cursor_pos(3+rl_point, term_rows);
+}
+
+int init_readline(readline_callback cb) {
+    // Disable completion. TODO: Is there a more robust way to do this?
+    if (rl_bind_key('\t', rl_insert))
+        return -1;
+
+    // Let us do all terminal and signal handling
+    rl_catch_signals = 0;
+    rl_catch_sigwinch = 0;
+    rl_deprep_term_function = NULL;
+    rl_prep_term_function = NULL;
+
+    // Prevent readline from setting the LINES and COLUMNS environment
+    // variables, which override dynamic size adjustments in ncurses. When
+    // using the alternate readline interface (as we do here), LINES and
+    // COLUMNS are not updated if the terminal is resized between two calls to
+    // rl_callback_read_char() (which is almost always the case).
+    rl_change_environment = 0;
+
+    // Handle input by manually feeding characters to readline
+    rl_getc_function = readline_getc;
+    rl_input_available_hook = readline_input_avail;
+    rl_redisplay_function = readline_redisplay;
+
+    rl_callback_handler_install("", cb);
+    return 0;
+}
+
+void deinit_readline(void) {
+    rl_callback_handler_remove();
+}
+
+////////////////////////////////////////
+//Helper functions for textio_getch_cr//
+////////////////////////////////////////
 
 //Helper function to interpret the button-press char
 static int parse_mouse_button(char c, textio_input *res) {   
@@ -335,6 +464,10 @@ static int convert_csi_fn_key(textio_input *res) {
     res->smoking_gun = 11;
     return -1;
 }
+
+///////////////////////
+//The big boy himself//
+///////////////////////
 
 //Maintains internal state machine. Uses input char to advance state machine,
 //returning 0 on succesful acceptance, and returning positive if no error 
