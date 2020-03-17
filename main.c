@@ -176,8 +176,6 @@ int main(int argc, char **argv) {
         char line[1024];
         int len = 0;
         
-        len = draw_dbg_guv(g, line);
-        if (len > 0) write(1, line, len);
         
         while(nb_dequeue_single(&netq, &c) == 0) {
             if (c != '\n') net_data[net_data_pos++] = c;
@@ -185,6 +183,7 @@ int main(int argc, char **argv) {
                 net_data[net_data_pos] = 0;
                 char *cpy = strdup(net_data);
                 char *old = append_log(f, 0, cpy);
+                g->need_redraw = 1;
                 if (old != NULL) free(old);
                 //cursor_pos(0,5);
                 //write(1, net_data, net_data_pos);
@@ -192,6 +191,9 @@ int main(int argc, char **argv) {
                 net_data_pos = 0;
             }
         }   
+        
+        len = draw_dbg_guv(g, line);
+        if (len > 0) write(1, line, len);
         
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
@@ -249,10 +251,12 @@ int main(int argc, char **argv) {
                     if (in.btn == TEXTIO_WUP) {
                         if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
                             if (g->buf_offset < SCROLLBACK - g->h - 1) g->buf_offset++;
+                            g->need_redraw = 1;
                         }
                     } else if (in.btn == TEXTIO_WDN) {
                         if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
                             if (g->buf_offset > 0) g->buf_offset--;
+                            g->need_redraw = 1;
                         }
                     }
                     sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 

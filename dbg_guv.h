@@ -40,6 +40,7 @@ typedef struct {
     int x, y; 
     int w, h; //Minimum: 6 by 6?
     int buf_offset; //Where to start reading from linebuffer
+    int need_redraw;
     
     //Mirror registers in hardware
     unsigned keep_pausing;

@@ -112,6 +112,8 @@ void del_dbg_guv(dbg_guv *d) {
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this... returns -1 on error
 int draw_dbg_guv(dbg_guv *g, char *buf) {
+    //Check if we need a redraw
+    if (g->need_redraw == 0) return 0;
     if (g->w < 12 || g->h < 6) {
         return -1;
     }
@@ -120,15 +122,20 @@ int draw_dbg_guv(dbg_guv *g, char *buf) {
     //Move to top-left
     int incr = cursor_pos_cmd(buf, g->x, g->y);
     buf += incr;
-    sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
-    buf += incr;
+    *buf++ = '+';
+    int i;
+    for (i = 1; i < g->w - 1; i++) *buf++ = '-';
+    *buf++ = '+';
+    
+    //This method is "more efficient", but not well supported
+    //sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
+    //buf += incr;
     
     //Draw logs and box edges
     //First get a handle to the line buffer for this dbg_guv
     linebuf *l = &(g->parent->logs[g->addr]);
     //Grab mutex for this buffer while we read it
     pthread_mutex_lock(&(g->parent->logs_mutex[g->addr]));
-    int i;
     for (i = g->h-2-1; i >= 0; i--) {
         //Move the cursor
         incr = cursor_pos_cmd(buf, g->x, g->y + 1 + (g->h-2-1 - i)); //I hope there's no OBOE
@@ -150,8 +157,12 @@ int draw_dbg_guv(dbg_guv *g, char *buf) {
     //Move to bottom-left
     incr = cursor_pos_cmd(buf, g->x, g->y + g->h - 1);
     buf += incr;
-    sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
-    buf += incr;
+    *buf++ = '+';
+    for (i = 1; i < g->w - 1; i++) *buf++ = '-';
+    *buf++ = '+';
+    //sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
+    //buf += incr;
     
+    g->need_redraw = 0;
     return buf - buf_saved;
 }
