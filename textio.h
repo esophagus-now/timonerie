@@ -24,12 +24,12 @@
 #define REPORT_CURSOR_OFF "\x1b[?1003l"
 #define LEN_REPORT_CURSOR_OFF 8
 
-#define BOX_VERT '|'
-#define BOX_TR   '+'
-#define BOX_BL   '+'
-#define BOX_HORZ '-'
-#define BOX_BR   '+'
-#define BOX_TL   '+'
+#define BOX_VERT "\u2502"
+#define BOX_TR   "\u2510"
+#define BOX_BL   "\u2514"
+#define BOX_HORZ "\u2500"
+#define BOX_BR   "\u2518"
+#define BOX_TL   "\u250C"
 
 /////////////////////////////////////////////////////
 //Constants and printable strings for mouse buttons//

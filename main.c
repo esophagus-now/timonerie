@@ -15,6 +15,7 @@
 #include <readline/history.h>
 #include "queue.h"
 #include "textio.h"
+#include "dbg_guv.h"
 
 void producer_cleanup(void *v) {
     queue *q = (queue*)v;
@@ -125,130 +126,6 @@ void* get_net(void *v) {
     return NULL;
 }
 
-typedef struct {
-    char *name;
-    int x, y; 
-    int w, h; //Minimum: 6 by 6?
-    
-    //TODO: some nice way of storing the data from the network
-    
-    //Mirror registers in hardware
-    unsigned keep_pausing;
-    unsigned keep_logging;
-    unsigned log_cnt;
-    unsigned keep_dropping;
-    unsigned drop_cnt;
-    unsigned inj_TDATA;
-    unsigned inj_TVALID;
-    unsigned inj_TKEEP;
-    unsigned inj_TLAST;
-    unsigned inj_TDEST;
-    unsigned inj_TID;
-} dbg_guv;
-
-dbg_guv* new_dbg_guv(char *name) {
-    dbg_guv *ret = malloc(sizeof(dbg_guv));
-    memset(ret, 0, sizeof(dbg_guv));
-    
-    if (name != NULL) {
-        ret->name = strdup(name);
-    }
-    ret->w = 6;
-    ret->h = 6;
-    
-    return ret;
-}
-
-void del_dbg_guv(dbg_guv *d) {
-    if (d != NULL) {
-        if (d->name != NULL) free(d->name);
-        free(d);
-    }
-}
-
-//Returns number of bytes added into buf.
-int redraw_dbg_guv(dbg_guv *g, char *buf) {
-    int bytes = 0;
-    
-    if (g->x < 0 || g->y < 0) { //TODO: screen sizes
-        return bytes;
-    }
-    
-    if (g->w < 6) {
-        g->w = 6;
-    }
-    
-    if (g->h < 6) {
-        g->h = 6;
-    }
-    
-    int inc;
-    int i;
-    
-    //Top bar
-    inc = cursor_pos_cmd(buf, g->x, g->y);
-    buf += inc;
-    //*buf++ = BOX_TL;
-    *buf++ = 0b11100010;
-    *buf++ = 0b10010100;
-    *buf++ = 0b10001100;
-    bytes += inc + 3;
-    for (i = 1; i < g->w - 1; i++) {
-        //*buf++ = BOX_HORZ;
-        *buf++ = 0b11100010;
-        *buf++ = 0b10010100;
-        *buf++ = 0b10000000;
-        bytes += 3;
-    }
-    //*buf++ = BOX_TR;
-    *buf++ = 0b11100010;
-    *buf++ = 0b10010100;
-    *buf++ = 0b10010000;
-    bytes+=3;
-    
-    //Vertical bars
-    for (i = 1; i < g->h - 1; i++) {
-        inc = cursor_pos_cmd(buf, g->x, g->y + i);
-        buf += inc;
-        //*buf++ = BOX_VERT;
-        *buf++ = 0b11100010;
-        *buf++ = 0b10010100;
-        *buf++ = 0b10000010;
-        bytes += inc + 3;
-        
-        inc = cursor_pos_cmd(buf, g->x + g->w - 1, g->y + i);
-        buf += inc;
-        //*buf++ = BOX_VERT;
-        *buf++ = 0b11100010;
-        *buf++ = 0b10010100;
-        *buf++ = 0b10000010;
-        bytes += inc + 3;
-    }
-    
-    //Bottom bar
-    inc = cursor_pos_cmd(buf, g->x, g->y + g->h - 1);
-    buf += inc;
-    //*buf++ = BOX_BL;
-    *buf++ = 0b11100010;
-    *buf++ = 0b10010100;
-    *buf++ = 0b10010100;
-    bytes += inc + 3;
-    for (i = 1; i < g->w - 1; i++) {
-        //*buf++ = BOX_HORZ;
-        *buf++ = 0b11100010;
-        *buf++ = 0b10010100;
-        *buf++ = 0b10000000;
-        bytes += 3;
-    }
-    //*buf++ = BOX_BR;
-    *buf++ = 0b11100010;
-    *buf++ = 0b10010100;
-    *buf++ = 0b10011000;
-    bytes+=3;
-    
-    return bytes;
-}
-
 int main(int argc, char **argv) {    
     atexit(clean_screen);
     term_init();
@@ -277,12 +154,18 @@ int main(int argc, char **argv) {
     pthread_mutex_unlock(&q.mutex);
     
     #define NET_DATA_MAX 80
-    char net_data[NET_DATA_MAX];
+    char net_data[NET_DATA_MAX + 1];
     int net_data_pos = 0;
+    
+    fpga_connection_info *f = new_fpga_connection(NULL, NULL);
     
     dbg_guv *g = new_dbg_guv(NULL);
     g->x = 5;
     g->y = 7;
+    g->w = 15;
+    g->h = 7;
+    g->parent = f;
+    g->addr = 0;
     
     textio_input in;
     
@@ -290,18 +173,22 @@ int main(int argc, char **argv) {
         int rc;
         char c;
         
-        char line[256];
+        char line[1024];
         int len = 0;
         
-        len = redraw_dbg_guv(g, line);
-        write(1, line, len);
+        len = draw_dbg_guv(g, line);
+        if (len > 0) write(1, line, len);
         
         while(nb_dequeue_single(&netq, &c) == 0) {
-            net_data[net_data_pos++] = c;
+            if (c != '\n') net_data[net_data_pos++] = c;
             if (c == '\n' || net_data_pos == NET_DATA_MAX - 1) {
-                cursor_pos(0,5);
-                write(1, net_data, net_data_pos);
-                write(1, ERASE_TO_END, sizeof(ERASE_TO_END));
+                net_data[net_data_pos] = 0;
+                char *cpy = strdup(net_data);
+                char *old = append_log(f, 0, cpy);
+                if (old != NULL) free(old);
+                //cursor_pos(0,5);
+                //write(1, net_data, net_data_pos);
+                //write(1, ERASE_TO_END, sizeof(ERASE_TO_END));
                 net_data_pos = 0;
             }
         }   
@@ -321,19 +208,12 @@ int main(int argc, char **argv) {
             break;
         }
         
-        //If user pressed \ we can quit
-        if (c == '\\') {
+        //If user pressed CTRL-D we can quit
+        if (c == '\x04') {
             pthread_cancel(prod);
             pthread_cancel(net_prod);
             break;
-        } /*else if (c == '/') {
-            pthread_mutex_lock(&q.mutex);
-            char *l = readline("Enter a line: ");
-            pthread_mutex_unlock(&q.mutex);
-            cursor_pos(1,4);
-            sprintf(line, "You entered: %s" ERASE_TO_END "%n", l, &len);  
-            write(1, line, len);  
-        } */ else {
+        } else {
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
                 switch(in.type) {
@@ -365,6 +245,16 @@ int main(int argc, char **argv) {
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                     break;
                 case TEXTIO_GETCH_MOUSE:
+                    //Just for fun: use scrollwheel inside dbg_guv
+                    if (in.btn == TEXTIO_WUP) {
+                        if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
+                            if (g->buf_offset < SCROLLBACK - g->h - 1) g->buf_offset++;
+                        }
+                    } else if (in.btn == TEXTIO_WDN) {
+                        if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
+                            if (g->buf_offset > 0) g->buf_offset--;
+                        }
+                    }
                     sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 
                         in.shift ? "(shift)" : "", 
                         in.meta ? "(alt)" : "", 
@@ -397,6 +287,7 @@ int main(int argc, char **argv) {
     pthread_join(prod, NULL);
     
     del_dbg_guv(g);
+    del_fpga_connection(f);
     clean_screen();
     return 0;
 }
