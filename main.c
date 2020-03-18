@@ -18,6 +18,9 @@
 #include "dbg_guv.h"
 
 void producer_cleanup(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered text producer cleanup\n");
+#endif
     queue *q = (queue*)v;
     
     pthread_mutex_lock(&q->mutex);
@@ -28,6 +31,9 @@ void producer_cleanup(void *v) {
 }
 
 void* producer(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered text producer\n");
+#endif
     queue *q = (queue*)v;
     
     pthread_cleanup_push(producer_cleanup, q);
@@ -35,7 +41,8 @@ void* producer(void *v) {
     //Read a single character from stdin until EOF
     char c;
     while (read(0, &c, 1) > 0) {
-        enqueue_single(q, c);
+        int rc = enqueue_single(q, c);
+        if (rc < 0) break;
     }
     
     pthread_cleanup_pop(1);
@@ -44,6 +51,9 @@ void* producer(void *v) {
 }
 
 void get_net_cleanup(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered get_net_cleanup\n");
+#endif
     queue *q = (queue*)v;
     
     pthread_mutex_lock(&q->mutex);
@@ -54,24 +64,75 @@ void get_net_cleanup(void *v) {
 }
 
 void get_net_addrinfo_cleanup(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered get_net_addrinfo_cleanup\n");
+#endif
     struct addrinfo **res = (struct addrinfo **)v;
     if (*res != NULL) freeaddrinfo(*res);
 }
 
 void get_net_socket_cleanup(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered get_net_socket_cleanup\n");
+#endif
     int *p = (int*)v;
     close(*p);
 }
 
+
 typedef struct {
-    queue *q;
     char *node;
     char *serv;
+    
+    int sfd;
+    pthread_t tx_thread;
+    
+    queue *ingress;
+    queue *egress;
 } get_net_args;
 
-void* get_net(void *v) {
+void get_net_tx_cleanup(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered get_net_tx_cleanup\n");
+#endif
     get_net_args *args = (get_net_args *)v;
-    queue *q = args->q;
+    
+    //Forcibly disconnect all producers and consumers of egress queue
+    pthread_mutex_lock(&args->egress->mutex);
+    args->egress->num_producers = -1;
+    args->egress->num_consumers = -1;
+    pthread_mutex_unlock(&args->egress->mutex);
+    
+    pthread_join(args->tx_thread, NULL);
+    
+#ifdef DEBUG_ON
+    fprintf(stderr, "net_tx joined\n");
+#endif
+}
+
+void* net_tx(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered net_tx\n");
+#endif
+    get_net_args *args = (get_net_args *)v;
+    queue *q = args->egress;
+    
+    char cmd[4];
+    while (dequeue_n(q, cmd, 4) == 0) {
+        int len = write(args->sfd, cmd, 4);
+        if (len <= 0) break;
+    }
+    
+    
+    pthread_exit(NULL);
+}
+
+void* get_net(void *v) {
+#ifdef DEBUG_ON
+    fprintf(stderr, "Entered net_mgr\n");
+#endif
+    get_net_args *args = (get_net_args *)v;
+    queue *q = args->ingress;
     
     pthread_cleanup_push(get_net_cleanup, q);
     
@@ -95,6 +156,8 @@ void* get_net(void *v) {
         goto done;
     }
     
+    args->sfd = sfd;
+    
     pthread_cleanup_push(get_net_socket_cleanup, &sfd);
     
     rc = connect(sfd, res->ai_addr, res->ai_addrlen);
@@ -108,18 +171,21 @@ void* get_net(void *v) {
     //Don't forget to mark as NULL so cleanup function can deal with it
     res = NULL;
     
+    //Spin up egress thread
+    pthread_create(&args->tx_thread, NULL, net_tx, args);
+    pthread_cleanup_push(get_net_tx_cleanup, args);
+    
     char buf[64];
     int len;
     while ((len = read(sfd, buf, 64)) > 0) {
         rc = queue_write(q, buf, len);
         if (rc < 0) {
-            fprintf(stderr, "Could not append network data into queue");
-            goto done;
+            break;
         }
     }
     
     done:
-    close(sfd);
+    pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
     pthread_cleanup_pop(1);
@@ -130,6 +196,22 @@ fpga_connection_info *f = NULL;
 dbg_guv *g = NULL;
 dbg_guv *h = NULL;
 
+queue *net_egress = NULL;
+
+
+#define DROP_CNT 0
+#define LOG_CNT 1
+#define INJ_TDATA 2
+#define INJ_TVALID 3
+#define INJ_TLAST 4
+#define INJ_TKEEP 5
+#define INJ_TDEST 6
+#define INJ_TID 7
+#define KEEP_PAUSING 8
+#define KEEP_LOGGING 9
+#define KEEP_DROPPING 10
+
+
 void got_rl_line(char *str) {
     cursor_pos(1,2);
     char line[80];
@@ -137,12 +219,58 @@ void got_rl_line(char *str) {
     sprintf(line, "Read line: %s" ERASE_TO_END "%n", str, &len);
     write(1, line, len);
     /* If the line has any text in it, save it on the history. */
-    if (str && *str)
+    if (str && *str) {
         add_history (str);
+        
+        int addr;
+        char cmd;
+        int param;
+        int num = sscanf(str, "%d %c %d", &addr, &cmd, &param);
+        if (num != 3) goto done;
+        if (addr != 0 && addr != 1) goto done;
+        
+        unsigned to_send;
+        
+        switch (cmd) {
+        case 'p':
+            to_send = (addr << 4) | KEEP_PAUSING;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            to_send = param;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        case 'l':
+            to_send = (addr << 4) | LOG_CNT;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            to_send = param;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        case 'L':
+            to_send = (addr << 4) | KEEP_LOGGING;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            to_send = param;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        case 'd':
+            to_send = (addr << 4) | DROP_CNT;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            to_send = param;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        case 'D':
+            to_send = (addr << 4) | KEEP_DROPPING;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            to_send = param;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        case 'c':
+            to_send = (addr << 4) | 0xF;
+            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
+            break;
+        }
+    }
     
-    if (f != NULL) append_log(f, 0, str);
-    else free(str);
-    if (g != NULL) g->need_redraw = 1;
+    done:
+    free(str);
 }
 
 enum {
@@ -159,27 +287,31 @@ int main(int argc, char **argv) {
     init_readline(got_rl_line);
     
     queue q = QUEUE_INITIALIZER;
+    q.num_producers++;
+    q.num_consumers++;    
     
     pthread_t prod;
     
     pthread_create(&prod, NULL, producer, &q);
     
-    pthread_mutex_lock(&q.mutex);
-    q.num_producers++;
-    pthread_mutex_unlock(&q.mutex);
+    queue net_rx = QUEUE_INITIALIZER;
+    queue net_tx = QUEUE_INITIALIZER;
+    net_rx.num_producers++;
+    net_rx.num_consumers++;
+    net_tx.num_producers++;
+    net_tx.num_consumers++;
+    pthread_t net_mgr;
     
-    queue netq = QUEUE_INITIALIZER;
-    pthread_t net_prod;
+    net_egress = &net_tx;
     
     get_net_args args = {
-        .q = &netq,
         .node = (argc > 1) ? argv[1] : "localhost",
-        .serv = (argc > 2) ? argv[2] : "5555"
+        .serv = (argc > 2) ? argv[2] : "5555",
+        .ingress = &net_rx,
+        .egress = &net_tx
     };
-    pthread_create(&net_prod, NULL, get_net, &args);
-    pthread_mutex_lock(&q.mutex);
-    netq.num_producers++;
-    pthread_mutex_unlock(&q.mutex);
+    
+    pthread_create(&net_mgr, NULL, get_net, &args);
     
     f = new_fpga_connection(NULL, NULL);
     
@@ -218,7 +350,7 @@ int main(int argc, char **argv) {
         unsigned msg[2];        
         
         //Get network data
-        while(nb_dequeue_n(&netq, (char*) msg, sizeof(msg)) == 0) {
+        while(nb_dequeue_n(&net_rx, (char*) msg, sizeof(msg)) == 0) {
             unsigned addr = msg[0];
             char *log_msg = malloc(32);
             sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
@@ -258,7 +390,6 @@ int main(int argc, char **argv) {
             cursor_pos(0,0);
             sprintf(line, "Error reading from queue. Quitting..." ERASE_TO_END "%n", &len);
             write(1, line, len);
-            pthread_cancel(prod);
             break;
         }
         
@@ -273,13 +404,41 @@ int main(int argc, char **argv) {
         
         //If user pressed CTRL-D we can quit
         if (c == '\x04') {
+#ifdef DEBUG_ON
+            fprintf(stderr, "Caught ctrl-D\n");
+#endif
+            pthread_mutex_lock(&q.mutex);
+            q.num_consumers--;
+            pthread_mutex_unlock(&q.mutex);
+            
+            pthread_mutex_lock(&net_tx.mutex);
+            net_tx.num_producers--;
+            pthread_mutex_unlock(&net_tx.mutex);
+            
+            pthread_mutex_lock(&net_rx.mutex);
+            net_rx.num_consumers--;
+            pthread_mutex_unlock(&net_rx.mutex);
+            
+            //This is just desperate...
+            pthread_cond_broadcast(&q.can_prod);
+            pthread_cond_broadcast(&q.can_cons);
+            pthread_cond_broadcast(&net_rx.can_prod);
+            pthread_cond_broadcast(&net_rx.can_cons);
+            pthread_cond_broadcast(&net_tx.can_prod);
+            pthread_cond_broadcast(&net_tx.can_cons);
+            
+            usleep(1000);
+            
+            //We gave peace a chance, but one of the threads may be blocked in
+            //a read call. We have no choice but to cancel them; I should find
+            //a way to fix this...
+            pthread_cancel(net_mgr);
             pthread_cancel(prod);
-            pthread_cancel(net_prod);
+            
             break;
         } else {
             if (mode == READLINE) {
                 forward_to_readline(c);
-                if (c == '\n') mode = NORMAL; //Exit readline mode on ESC?
             }
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
@@ -315,6 +474,10 @@ int main(int argc, char **argv) {
                     );
                     break;
                 case TEXTIO_GETCH_ESCSEQ:
+                    if (in.code == 'q') {
+                        mode = NORMAL;
+                        break;
+                    }
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                     break;
                 case TEXTIO_GETCH_MOUSE:
@@ -368,14 +531,14 @@ int main(int argc, char **argv) {
         sched_yield();
     }
     
-    pthread_mutex_lock(&netq.mutex);
-    if (netq.num_producers > 0) {
-        pthread_cancel(net_prod);
-    }
-    pthread_mutex_unlock(&netq.mutex);
-    
-    pthread_join(net_prod, NULL);
+    pthread_join(net_mgr, NULL);
+#ifdef DEBUG_ON
+    fprintf(stderr, "Joined net_mgr\n");
+#endif
     pthread_join(prod, NULL);
+#ifdef DEBUG_ON
+    fprintf(stderr, "Joined prod\n");
+#endif
     
     del_dbg_guv(h);
     del_dbg_guv(g);
