@@ -128,6 +128,7 @@ void* get_net(void *v) {
 
 fpga_connection_info *f = NULL;
 dbg_guv *g = NULL;
+dbg_guv *h = NULL;
 
 void got_rl_line(char *str) {
     cursor_pos(1,2);
@@ -135,6 +136,10 @@ void got_rl_line(char *str) {
     int len;
     sprintf(line, "Read line: %s" ERASE_TO_END "%n", str, &len);
     write(1, line, len);
+    /* If the line has any text in it, save it on the history. */
+    if (str && *str)
+        add_history (str);
+    
     if (f != NULL) append_log(f, 0, str);
     else free(str);
     if (g != NULL) g->need_redraw = 1;
@@ -176,20 +181,23 @@ int main(int argc, char **argv) {
     netq.num_producers++;
     pthread_mutex_unlock(&q.mutex);
     
-    #define NET_DATA_MAX 80
-    char net_data[NET_DATA_MAX + 1];
-    int net_data_pos = 0;
-    
     f = new_fpga_connection(NULL, NULL);
     
     g = new_dbg_guv(NULL);
-    g->x = 5;
+    g->x = 1;
     g->y = 7;
-    g->w = 25;
+    g->w = 30;
     g->h = 7;
     g->parent = f;
     g->addr = 0;
     
+    h = new_dbg_guv(NULL);
+    h->x = 32;
+    h->y = 7;
+    h->w = 30;
+    h->h = 7;
+    h->parent = f;
+    h->addr = 1;
     
         
     char line[1024];
@@ -206,24 +214,31 @@ int main(int argc, char **argv) {
     
     while(1) {
         int rc;
-        char c;        
+        char c;
+        unsigned msg[2];        
         
-        while(nb_dequeue_single(&netq, &c) == 0) {
-            if (c != '\n') net_data[net_data_pos++] = c;
-            if (c == '\n' || net_data_pos == NET_DATA_MAX - 1) {
-                net_data[net_data_pos] = 0;
-                char *cpy = strdup(net_data);
-                char *old = append_log(f, 0, cpy);
-                g->need_redraw = 1;
-                if (old != NULL) free(old);
-                //cursor_pos(0,5);
-                //write(1, net_data, net_data_pos);
-                //write(1, ERASE_TO_END, sizeof(ERASE_TO_END));
-                net_data_pos = 0;
-            }
+        //Get network data
+        while(nb_dequeue_n(&netq, (char*) msg, sizeof(msg)) == 0) {
+            unsigned addr = msg[0];
+            char *log_msg = malloc(32);
+            sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
+            
+            char *old = append_log(f, addr, log_msg);
+            if (addr == 0) g->need_redraw = 1;
+            else if (addr == 1) h->need_redraw = 1;
+            if (old != NULL) free(old);
         }   
         
         len = draw_dbg_guv(g, line);
+        if (len > 0) {
+            write(1, line, len);
+            if (mode == READLINE) {
+                //Put cursor in the right place
+                place_readline_cursor();
+            }
+        }
+        
+        len = draw_dbg_guv(h, line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -315,6 +330,18 @@ int main(int argc, char **argv) {
                             g->need_redraw = 1;
                         }
                     }
+                    
+                    if (in.btn == TEXTIO_WUP) {
+                        if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
+                            if (h->buf_offset < SCROLLBACK - h->h - 1) h->buf_offset++;
+                            h->need_redraw = 1;
+                        }
+                    } else if (in.btn == TEXTIO_WDN) {
+                        if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
+                            if (h->buf_offset > 0) h->buf_offset--;
+                            h->need_redraw = 1;
+                        }
+                    }
                     sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 
                         in.shift ? "(shift)" : "", 
                         in.meta ? "(alt)" : "", 
@@ -350,6 +377,7 @@ int main(int argc, char **argv) {
     pthread_join(net_prod, NULL);
     pthread_join(prod, NULL);
     
+    del_dbg_guv(h);
     del_dbg_guv(g);
     del_fpga_connection(f);
     clean_screen();

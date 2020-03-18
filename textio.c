@@ -167,7 +167,7 @@ void readline_redisplay(void) {
     int len;
     
     //Write the line to the correct place on the screen
-    sprintf(line, ": %-*.*s%n", term_cols-2, term_cols-2, rl_line_buffer, &len);
+    sprintf(line, "%s%-*.*s%n", rl_prompt, term_cols-2, term_cols-2, rl_line_buffer, &len);
     write(1, line, len);
     
     //Put cursor in the right place
@@ -201,7 +201,7 @@ int init_readline(readline_callback cb) {
     rl_input_available_hook = readline_input_avail;
     rl_redisplay_function = readline_redisplay;
 
-    rl_callback_handler_install("", cb);
+    rl_callback_handler_install(": ", cb);
     return 0;
 }
 
