@@ -233,6 +233,7 @@ void got_rl_line(char *str) {
         
         switch (cmd) {
         case 'p':
+        case 'P':
             to_send = (addr << 4) | KEEP_PAUSING;
             if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
             to_send = param;
