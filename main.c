@@ -316,21 +316,27 @@ int main(int argc, char **argv) {
     
     f = new_fpga_connection(NULL, NULL);
     
-    g = new_dbg_guv(NULL);
+    g = new_dbg_guv("default");
     g->x = 1;
     g->y = 7;
     g->w = 30;
     g->h = 7;
     g->parent = f;
     g->addr = 0;
+    dbg_guv_set_name(g, "FIZZCNT");
+    g->keep_logging = 1;
     
-    h = new_dbg_guv(NULL);
+    h = new_dbg_guv("default");
     h->x = 32;
     h->y = 7;
     h->w = 30;
     h->h = 7;
     h->parent = f;
     h->addr = 1;
+    dbg_guv_set_name(h, "FIZZBUZZ");
+    h->log_cnt = 1;
+    h->keep_pausing = 1;
+    h->keep_dropping = 1;
     
         
     char line[1024];

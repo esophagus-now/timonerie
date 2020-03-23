@@ -34,7 +34,7 @@ typedef struct _fpga_connection_info {
 
 //This struct contains all the state associated with displaying dbg_guv
 // information.
-typedef struct {
+typedef struct _dbg_guv {
     //Display information
     char *name;
     int x, y; 
@@ -66,12 +66,18 @@ fpga_connection_info *new_fpga_connection(char *node, char *serv);
 void del_fpga_connection(fpga_connection_info *f);
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
-//do NOT call this function if you are holding a mutex!
+//do NOT call this function if you are holding a mutex! By the way, does NOT
+//make an internal copy of the string; you must copy it yourself if this is
+//desired
 char *append_log(fpga_connection_info *f, int addr, char *log);
 
 dbg_guv* new_dbg_guv(char *name);
 
 void del_dbg_guv(dbg_guv *d);
+
+//Duplicates string in name and saves it into d. If name was previously set, it
+//will be freed
+void dbg_guv_set_name(dbg_guv *d, char *name);
 
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this...

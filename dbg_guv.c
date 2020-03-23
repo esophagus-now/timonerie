@@ -109,6 +109,13 @@ void del_dbg_guv(dbg_guv *d) {
     }
 }
 
+//Duplicates string in name and saves it into d. If name was previously set, it
+//will be freed
+void dbg_guv_set_name(dbg_guv *d, char *name) {
+    if (d->name != NULL) free(d->name);
+    d->name = strdup(name);
+}
+
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this... returns -1 on error
 int draw_dbg_guv(dbg_guv *g, char *buf) {
@@ -122,10 +129,21 @@ int draw_dbg_guv(dbg_guv *g, char *buf) {
     //Move to top-left
     int incr = cursor_pos_cmd(buf, g->x, g->y);
     buf += incr;
-    *buf++ = '+';
+    int len;
+    sprintf(buf, "+%.*s-%n",
+        g->w - 6,
+        g->name,
+        &len
+    );
+    buf += len;
     int i;
-    for (i = 1; i < g->w - 1; i++) *buf++ = '-';
-    *buf++ = '+';
+    for (i = len; i < g->w - 4; i++) *buf++ = '-';
+    sprintf(buf, "%c%c%c+",
+        g->keep_pausing ? 'P' : '-',
+        g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-'),
+        g->keep_dropping ? 'D' : (g->log_cnt > 0 ? 'd' : '-')
+    );
+    buf += 4;
     
     //This method is "more efficient", but not well supported
     //sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
