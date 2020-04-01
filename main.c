@@ -135,6 +135,9 @@ void* get_net(void *v) {
     get_net_args *args = (get_net_args *)v;
     queue *q = args->ingress;
     
+    char line[80];
+    int len;
+    
     pthread_cleanup_push(get_net_cleanup, q);
     
     struct addrinfo *res;
@@ -146,15 +149,19 @@ void* get_net(void *v) {
     
     int rc = getaddrinfo(args->node, args->serv, &hint, &res);
     if (rc < 0) {
-        fprintf(stderr, "Could not resolve [%s]: %s\n", args->node, gai_strerror(rc));
-        goto done;
+		cursor_pos(1, term_rows-1);
+        sprintf(line, "Could not resolve [%s]: %s" ERASE_TO_END "%n", args->node, gai_strerror(rc), &len);
+        write(STDOUT_FILENO, line, len);
+        goto err_close_tx_thread;
     }
     pthread_cleanup_push(get_net_addrinfo_cleanup, &res);
     
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd < 0) {
-        fprintf(stderr, "Could not open socket: %s\n", strerror(errno));
-        goto done;
+		cursor_pos(1, term_rows-1);
+        sprintf(line, "Could not open socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
+        write(STDOUT_FILENO, line, len);
+        goto err_free_addrinfo;
     }
     
     args->sfd = sfd;
@@ -163,8 +170,10 @@ void* get_net(void *v) {
     
     rc = connect(sfd, res->ai_addr, res->ai_addrlen);
     if (rc < 0) {
-        fprintf(stderr, "Could not connect socket: %s\n", strerror(errno));
-        goto done;
+		cursor_pos(1, term_rows-1);
+        sprintf(line, "Could not connect socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
+        write(STDOUT_FILENO, line, len);
+        goto err_close_socket;
     }
     
     //This is a pretty long-running thread, so free the memory ASAP
@@ -185,10 +194,12 @@ void* get_net(void *v) {
         }
     }
     
-    done:
     pthread_cleanup_pop(1);
+err_close_socket:
     pthread_cleanup_pop(1);
+err_free_addrinfo:
     pthread_cleanup_pop(1);
+err_close_tx_thread:
     pthread_cleanup_pop(1);
     return NULL;
 }
@@ -208,7 +219,7 @@ void got_rl_line(char *str) {
 		dbg_cmd cmd;
 		int rc = parse_dbg_cmd(&cmd, str);
 		if (rc < 0) {
-			cursor_pos(term_rows - 1, 1);
+			cursor_pos(1, term_rows-1);
 			sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
 			write(1, line, len);
 			return;
