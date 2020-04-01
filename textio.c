@@ -32,20 +32,20 @@ char *FN_KEY_NAMES[] = {
 #undef X
 
 //Printable error messages
-char *TEXTIO_SUCC = "success";
-char *TEXTIO_UNEX = "unexpected character"; //Kind of a catch-all, but whatever
-char *TEXTIO_BADX = "invalid X coordinate";
-char *TEXTIO_BADY = "invalid Y coordinate";
-char *TEXTIO_BADB = "invalid button code";
-char *TEXTIO_UNICODE_TOO_LONG = "Unicode sequence is too long";
-char *TEXTIO_UNICODE_UNEX = "unexpected continuation sequence";
-char *TEXTIO_UNICODE_CONT_EXP = "continuation sequence expected but not found";
-char *TEXTIO_BAD_FN_KEY_CODE = "expected [PQRS] after ^[[O";
-char *TEXTIO_BAD_ESCAPE_CODE = "unrecognized escape sequence code";
-char *TEXTIO_TOO_MANY_PARAMS = "too many parameters in escape sequence";
-char *TEXTIO_IMPOSSIBLE = "TEXTIO library got to a place in the code that Marco thought was impossible to reach";
-char *TEXTIO_BAD_TILDE_CODE = "bad code in ^[[#~ or ^[[#;#~ sequence";
-char *TEXTIO_BAD_MODIFIER_CODE = "bad modifier code";
+char const *const TEXTIO_SUCC = "success";
+char const *const TEXTIO_UNEX = "unexpected character"; //Kind of a catch-all, but whatever
+char const *const TEXTIO_BADX = "invalid X coordinate";
+char const *const TEXTIO_BADY = "invalid Y coordinate";
+char const *const TEXTIO_BADB = "invalid button code";
+char const *const TEXTIO_UNICODE_TOO_LONG = "Unicode sequence is too long";
+char const *const TEXTIO_UNICODE_UNEX = "unexpected continuation sequence";
+char const *const TEXTIO_UNICODE_CONT_EXP = "continuation sequence expected but not found";
+char const *const TEXTIO_BAD_FN_KEY_CODE = "expected [PQRS] after ^[[O";
+char const *const TEXTIO_BAD_ESCAPE_CODE = "unrecognized escape sequence code";
+char const *const TEXTIO_TOO_MANY_PARAMS = "too many parameters in escape sequence";
+char const *const TEXTIO_IMPOSSIBLE = "TEXTIO library got to a place in the code that Marco thought was impossible to reach";
+char const *const TEXTIO_BAD_TILDE_CODE = "bad code in ^[[#~ or ^[[#;#~ sequence";
+char const *const TEXTIO_BAD_MODIFIER_CODE = "bad modifier code";
 
 void cursor_pos(int x, int y) {
     char line[80];
@@ -207,6 +207,15 @@ int init_readline(readline_callback cb) {
 
 void deinit_readline(void) {
     rl_callback_handler_remove();
+}
+
+
+void enable_mouse_reporting() {
+    write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
+}
+
+void disable_mouse_reporting() {
+    write(1, REPORT_CURSOR_OFF, LEN_REPORT_CURSOR_OFF);
 }
 
 ////////////////////////////////////////

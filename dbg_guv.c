@@ -9,8 +9,10 @@ fpga_connection_info *new_fpga_connection(char *node, char *serv) {
     fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
     memset(&ret->logs, 0, sizeof(ret->logs));
     int i;
-    for (i = 0; i < MAX_GUVS_PER_FPGA; i++)
+    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
         pthread_mutex_init(&ret->logs_mutex[i], NULL);
+        ret->guvs[i] = new_dbg_guv(NULL);
+    }
     
     pthread_mutex_init(&ret->ingress.mutex, NULL);
     pthread_mutex_init(&ret->egress.mutex, NULL);
@@ -48,6 +50,8 @@ void del_fpga_connection(fpga_connection_info *f) {
         for (j = 0; j < SCROLLBACK; j++) {
             if (f->logs[i].lines[j] != NULL) free(f->logs[i].lines[j]);
         }
+        
+        if (f->guvs[i] != NULL) free(f->guvs[i]);
     }
     
     free(f);
@@ -141,7 +145,7 @@ int draw_dbg_guv(dbg_guv *g, char *buf) {
     sprintf(buf, "%c%c%c+",
         g->keep_pausing ? 'P' : '-',
         g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-'),
-        g->keep_dropping ? 'D' : (g->log_cnt > 0 ? 'd' : '-')
+        g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-')
     );
     buf += 4;
     

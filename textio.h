@@ -124,7 +124,7 @@ typedef struct _textio_input{
     int y;
     
     //For error reporting
-    char *error_str;
+    char const *error_str;
     char smoking_gun;
     char expected;
 } textio_input;
@@ -162,22 +162,26 @@ void place_readline_cursor(void);
 int init_readline(readline_callback cb);
 void deinit_readline(void);
 
+void enable_mouse_reporting();
+
+void disable_mouse_reporting();
+
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//
 //////////////////////////////////////////////////
-extern char *TEXTIO_SUCC;
-extern char *TEXTIO_UNEX; //Kind of a catch-all, but whatever
-extern char *TEXTIO_BADX;
-extern char *TEXTIO_BADY;
-extern char *TEXTIO_BADB;
-extern char *TEXTIO_UNICODE_TOO_LONG;
-extern char *TEXTIO_UNICODE_UNEX;
-extern char *TEXTIO_UNICODE_CONT_EXP;
-extern char *TEXTIO_BAD_FN_KEY_CODE;
-extern char *TEXTIO_BAD_ESCAPE_CODE;
-extern char *TEXTIO_TOO_MANY_PARAMS;
-extern char *TEXTIO_IMPOSSIBLE;
-extern char *TEXTIO_BAD_TILDE_CODE;
-extern char *TEXTIO_BAD_MODIFIER_CODE;
+extern char const *const TEXTIO_SUCC;
+extern char const *const TEXTIO_UNEX; //Kind of a catch-all, but whatever
+extern char const *const TEXTIO_BADX;
+extern char const *const TEXTIO_BADY;
+extern char const *const TEXTIO_BADB;
+extern char const *const TEXTIO_UNICODE_TOO_LONG;
+extern char const *const TEXTIO_UNICODE_UNEX;
+extern char const *const TEXTIO_UNICODE_CONT_EXP;
+extern char const *const TEXTIO_BAD_FN_KEY_CODE;
+extern char const *const TEXTIO_BAD_ESCAPE_CODE;
+extern char const *const TEXTIO_TOO_MANY_PARAMS;
+extern char const *const TEXTIO_IMPOSSIBLE;
+extern char const *const TEXTIO_BAD_TILDE_CODE;
+extern char const *const TEXTIO_BAD_MODIFIER_CODE;
 
 #endif

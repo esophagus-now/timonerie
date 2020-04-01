@@ -16,6 +16,7 @@
 #include "queue.h"
 #include "textio.h"
 #include "dbg_guv.h"
+#include "dbg_cmd.h"
 
 void producer_cleanup(void *v) {
 #ifdef DEBUG_ON
@@ -193,24 +194,8 @@ void* get_net(void *v) {
 }
 
 fpga_connection_info *f = NULL;
-dbg_guv *g = NULL;
-dbg_guv *h = NULL;
 
 queue *net_egress = NULL;
-
-
-#define DROP_CNT 0
-#define LOG_CNT 1
-#define INJ_TDATA 2
-#define INJ_TVALID 3
-#define INJ_TLAST 4
-#define INJ_TKEEP 5
-#define INJ_TDEST 6
-#define INJ_TID 7
-#define KEEP_PAUSING 8
-#define KEEP_LOGGING 9
-#define KEEP_DROPPING 10
-
 
 void got_rl_line(char *str) {
     cursor_pos(1,2);
@@ -220,57 +205,73 @@ void got_rl_line(char *str) {
     write(1, line, len);
     /* If the line has any text in it, save it on the history. */
     if (str && *str) {
-        add_history (str);
+		dbg_cmd cmd;
+		int rc = parse_dbg_cmd(&cmd, str);
+		if (rc < 0) {
+			cursor_pos(term_rows - 1, 1);
+			sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
+			write(1, line, len);
+			return;
+		}
+		
+        add_history(str);
+        dbg_guv *g = f->guvs[cmd.dbg_guv_addr];
+        //Seems silly to do yet another switch statement after the one in
+        //parse_dbg_cmd... but anyway, it decouples the two bits of code
+        //so it's easier for me to change it later if I have to
+        switch (cmd.type) {
+		case DROP_CNT:
+			g->drop_cnt = cmd.param;
+			break;
+		case LOG_CNT:
+			g->log_cnt = cmd.param;
+			break;
+		case INJ_TDATA:
+			g->inj_TDATA = cmd.param;
+			break;
+		case INJ_TVALID:
+			g->inj_TVALID = cmd.param;
+			break;
+		case INJ_TLAST:
+			g->inj_TLAST = cmd.param;
+			break;
+		case INJ_TKEEP:
+			g->inj_TKEEP = cmd.param;
+			break;
+		case INJ_TDEST:
+			g->inj_TDEST = cmd.param;
+			break;
+		case INJ_TID:
+			g->inj_TID = cmd.param;
+			break;
+		case KEEP_PAUSING:
+			g->keep_pausing = cmd.param;
+			break;
+		case KEEP_LOGGING:
+			g->keep_logging = cmd.param;
+			break;
+		case KEEP_DROPPING:
+			g->keep_dropping = cmd.param;
+			break;
+		case DUT_RESET:
+			g->dut_reset = cmd.param;
+			break;
+		case LATCH:
+			g->need_redraw = 1;
+			break;
+		default:
+			//Just here to get rid of warning for not using everything in the enum
+			break;
+		}
         
-        int addr;
-        char cmd;
-        int param;
-        int num = sscanf(str, "%d %c %d", &addr, &cmd, &param);
-        if (num != 3) goto done;
-        if (addr != 0 && addr != 1) goto done;
-        
-        unsigned to_send;
-        
-        switch (cmd) {
-        case 'p':
-        case 'P':
-            to_send = (addr << 4) | KEEP_PAUSING;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            to_send = param;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        case 'l':
-            to_send = (addr << 4) | LOG_CNT;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            to_send = param;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        case 'L':
-            to_send = (addr << 4) | KEEP_LOGGING;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            to_send = param;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        case 'd':
-            to_send = (addr << 4) | DROP_CNT;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            to_send = param;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        case 'D':
-            to_send = (addr << 4) | KEEP_DROPPING;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            to_send = param;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        case 'c':
-            to_send = (addr << 4) | 0xF;
-            if (net_egress != NULL) queue_write(net_egress, (char *) &to_send, sizeof(to_send));
-            break;
-        }
+        //Actually send the command
+        queue_write(net_egress, (char*) &cmd.addr, sizeof(cmd.addr));
+        if (cmd.has_param)
+			queue_write(net_egress, (char*) &cmd.param, sizeof(cmd.param));
+		
+		//Done!
     }
     
-    done:
     free(str);
 }
 
@@ -316,7 +317,7 @@ int main(int argc, char **argv) {
     
     f = new_fpga_connection(NULL, NULL);
     
-    g = new_dbg_guv("default");
+    dbg_guv *g = f->guvs[0];
     g->x = 1;
     g->y = 7;
     g->w = 30;
@@ -324,9 +325,8 @@ int main(int argc, char **argv) {
     g->parent = f;
     g->addr = 0;
     dbg_guv_set_name(g, "FIZZCNT");
-    g->keep_logging = 1;
     
-    h = new_dbg_guv("default");
+    dbg_guv *h = f->guvs[1];
     h->x = 32;
     h->y = 7;
     h->w = 30;
@@ -334,10 +334,6 @@ int main(int argc, char **argv) {
     h->parent = f;
     h->addr = 1;
     dbg_guv_set_name(h, "FIZZBUZZ");
-    h->log_cnt = 1;
-    h->keep_pausing = 1;
-    h->keep_dropping = 1;
-    
         
     char line[1024];
     int len = 0;
@@ -463,6 +459,7 @@ int main(int argc, char **argv) {
                     }        
                     if (mode == NORMAL && in.c == ':') {
                         mode = READLINE;
+                        disable_mouse_reporting();
                         readline_redisplay();
                         status_drawn = 0;
                         continue;
@@ -483,6 +480,7 @@ int main(int argc, char **argv) {
                 case TEXTIO_GETCH_ESCSEQ:
                     if (in.code == 'q') {
                         mode = NORMAL;
+                        enable_mouse_reporting();
                         break;
                     }
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
@@ -547,8 +545,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Joined prod\n");
 #endif
     
-    del_dbg_guv(h);
-    del_dbg_guv(g);
     del_fpga_connection(f);
     clean_screen();
     return 0;

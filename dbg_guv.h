@@ -13,15 +13,15 @@ typedef struct _linebuf {
     int pos;
 } linebuf;
 
+struct _dbg_guv;
+
 #define MAX_GUVS_PER_FPGA 32
 #define LOG_IN_MEM_SZ 4096
 typedef struct _fpga_connection_info {
-    //Logs for each governor. This uses a ping-pong approach; when the second 
-    //buffer fills up, the first one is written to disk. By doing this 
-    //carefully, we always ensure a minimum amount of scrollback. And if we 
-    //really wanted to be tricky, we could reload things from disk when needed
     linebuf logs[MAX_GUVS_PER_FPGA];
     pthread_mutex_t logs_mutex[MAX_GUVS_PER_FPGA];
+    
+    struct _dbg_guv *guvs[MAX_GUVS_PER_FPGA];
     
     struct sockaddr *addr;
     int addr_len;
@@ -54,6 +54,7 @@ typedef struct _dbg_guv {
     unsigned inj_TLAST;
     unsigned inj_TDEST;
     unsigned inj_TID;
+    unsigned dut_reset;
     
     //Address information for this dbg_guv
     fpga_connection_info *parent;
