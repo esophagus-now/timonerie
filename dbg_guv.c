@@ -6,6 +6,8 @@
 #include <sys/types.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sched.h>
 #include "dbg_guv.h"
 #include "textio.h"
 
@@ -13,6 +15,10 @@ char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
 char const *const DBG_GUV_NULL_CB = "received NULL callback";
 char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
+
+//////////////////////////////
+//Static functions/variables//
+//////////////////////////////
 
 //Little helper functions. I probably should have used container_of, but
 //whatever
@@ -26,11 +32,33 @@ static inline pthread_mutex_t *get_msg_win_mutex(dbg_guv *g) {
 	return &f->logs_mutex[g->addr];
 }
 
-
 //Thread that manages outgoing network data. Empties fpga->egress queue
 //arg is a pointer to an fpga_connection_info struct
 static void* fpga_egress_thread(void *arg) {
-    return NULL;
+    fpga_connection_info *info = (fpga_connection_info *)v;
+	#ifdef DEBUG_ON
+	fprintf(stderr, "Entered net_tx (%p)\n", info);
+	#endif
+	
+    if (info == NULL) {
+		#ifdef DEBUG_ON
+		fprintf(stderr, "NULL argument to fpga_egress_thread!\n", info);
+		#endif
+		pthread_exit(NULL);
+	}
+	
+	queue *q = info->egress;
+    
+    char cmd[4];
+    while (dequeue_n(q, cmd, 4) == 0) {
+        int len = write(info->sfd, cmd, 4);
+        if (len <= 0) break;
+    }
+    
+	#ifdef DEBUG_ON
+    fprintf(stderr, "Exited net_tx (%p)\n", info);
+	#endif
+    pthread_exit(NULL);
 }
 
 //A helper function to properly allocate, construct, and initialize an 
@@ -163,6 +191,7 @@ static void open_fpga_conn_thread(void *v) {
 	f->egress.num_producers++;
 	f->egress.num_consumers++;
     pthread_create(&args->tx_thread, NULL, net_tx, args);
+    f->net_tx_started = 1;
     args->net_tx_started = 1;
 	
 	//Clean up and exit
@@ -178,6 +207,10 @@ err_nothing:
 	if(cb != NULL) cb(ret);
 	pthread_exit(NULL);
 }
+
+///////////////////////////////////////////
+//Implementations of prototypes in header//
+///////////////////////////////////////////
 
 //(copy comments from header once I settle on them)
 int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data) {
@@ -215,14 +248,22 @@ void del_fpga_connection(fpga_connection_info *f) {
     //Gracefully quit early if f is NULL
     if (f == NULL) return;
     
-#ifndef DISABLE_WEIRD_LOCK
     pthread_mutex_lock(&f->egress.mutex);
+    f->egress.num_consumers = -1;
+    f->egress.num_producers = -1;
     pthread_mutex_unlock(&f->egress.mutex);
-    pthread_mutex_lock(&f->ingress.mutex);
-    pthread_mutex_unlock(&f->ingress.mutex);
-#endif
+    
+    //Not sure if this is needed, but make sure we allow threads on this
+    //queue to exit gracefully
+    pthread_cond_broadcast(&f->egress.can_cons);
+    pthread_cond_broadcast(&f->egress.can_prod);
+    sched_yield();
+    
+    //We gave peace a chance, but really, make sure net_tx stops
+    pthread_cancel(&f->net_tx)
+    
+    //We're done with the egress queue
     pthread_mutex_destroy(&f->egress.mutex);
-    pthread_mutex_destroy(&f->ingress.mutex);
     
     //Try locking and unlocking all mutexes to wait until last person 
     //relinquishes it
@@ -230,10 +271,10 @@ void del_fpga_connection(fpga_connection_info *f) {
     //locking these mutexes later
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-#ifndef DISABLE_WEIRD_LOCK
+		#ifndef DISABLE_WEIRD_LOCK
         pthread_mutex_lock(&f->logs_mutex[i]);
         pthread_mutex_unlock(&f->logs_mutex[i]);
-#endif
+		#endif
         pthread_mutex_destroy(&f->logs_mutex[i]);
         
         //Slow as hell... there must be a better way...
@@ -246,6 +287,7 @@ void del_fpga_connection(fpga_connection_info *f) {
             if (f->logs[i].l.lines[j] != NULL) free(f->logs[i].l.lines[j]);
         }
         
+        //Free up the stuff from the message window
         deinit_msg_win(&f->logs[i]);
     }
     

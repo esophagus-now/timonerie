@@ -49,10 +49,7 @@ typedef struct _fpga_connection_info {
     int addr_len;
     int sfd;
     int sfd_state;
-    
-    //(This may disappear) network management threads can enqueue onto
-    //ingress queue
-    queue ingress;    
+     
     //Other threads can enqueue dbg_guv command messages on egress queue
     queue egress;
     //This is the thread ID for the thread that empties egress and sends 
