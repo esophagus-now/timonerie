@@ -24,31 +24,31 @@ char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
 //Little helper functions. I probably should have used container_of, but
 //whatever
 static inline msg_win *get_msg_win(dbg_guv *g) {
-	fpga_connection_info *f = g->parent;
-	return &f->logs[g->addr];
+    fpga_connection_info *f = g->parent;
+    return &f->logs[g->addr];
 }
 
 static inline pthread_mutex_t *get_msg_win_mutex(dbg_guv *g) {
-	fpga_connection_info *f = g->parent;
-	return &f->logs_mutex[g->addr];
+    fpga_connection_info *f = g->parent;
+    return &f->logs_mutex[g->addr];
 }
 
 //Thread that manages outgoing network data. Empties fpga->egress queue
 //arg is a pointer to an fpga_connection_info struct
 static void* fpga_egress_thread(void *arg) {
     fpga_connection_info *info = (fpga_connection_info *)arg;
-	#ifdef DEBUG_ON
-	fprintf(stderr, "Entered net_tx (%p)\n", info);
-	#endif
-	
+    #ifdef DEBUG_ON
+    fprintf(stderr, "Entered net_tx (%p)\n", info);
+    #endif
+    
     if (info == NULL) {
-		#ifdef DEBUG_ON
-		fprintf(stderr, "NULL argument to fpga_egress_thread!\n");
-		#endif
-		pthread_exit(NULL);
-	}
-	
-	queue *q = &info->egress;
+        #ifdef DEBUG_ON
+        fprintf(stderr, "NULL argument to fpga_egress_thread!\n");
+        #endif
+        pthread_exit(NULL);
+    }
+    
+    queue *q = &info->egress;
     
     char cmd[4];
     while (dequeue_n(q, cmd, 4) == 0) {
@@ -56,34 +56,34 @@ static void* fpga_egress_thread(void *arg) {
         if (len <= 0) break;
     }
     
-	#ifdef DEBUG_ON
+    #ifdef DEBUG_ON
     fprintf(stderr, "Exited net_tx (%p)\n", info);
-	#endif
+    #endif
     pthread_exit(NULL);
 }
 
 //A helper function to properly allocate, construct, and initialize an 
 //fpga_connection_info struct.
 static fpga_connection_info *construct_fpga_connection() {
-	//TODO: sanity check inputs
-	
+    //TODO: sanity check inputs
+    
     fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
     if (!ret) return NULL;
     
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-		int rc = init_msg_win(&(ret->logs[i]), NULL);
-		if (rc < 0) {
-			fprintf(stderr, "Could not allocate a msg_win while constructing fpga_connection_info: %s\n", ret->logs[i].error_str);
-			//Clean up everything we allocated so far
-			int j;
-			for (j = i - 1; j >= 0; j--) {
-				pthread_mutex_destroy(&ret->logs_mutex[j]);
-			}
-			free(ret);
-			return NULL;
-		}
-		
+        int rc = init_msg_win(&(ret->logs[i]), NULL);
+        if (rc < 0) {
+            fprintf(stderr, "Could not allocate a msg_win while constructing fpga_connection_info: %s\n", ret->logs[i].error_str);
+            //Clean up everything we allocated so far
+            int j;
+            for (j = i - 1; j >= 0; j--) {
+                pthread_mutex_destroy(&ret->logs_mutex[j]);
+            }
+            free(ret);
+            return NULL;
+        }
+        
         pthread_mutex_init(&ret->logs_mutex[i], NULL);
         
         ret->guvs[i].values_unknown = 1;
@@ -98,11 +98,11 @@ static fpga_connection_info *construct_fpga_connection() {
 
 //Struct for arguments to thread that opens a new connection
 typedef struct _open_fpga_conn_args {
-	fpga_connection_info *f;
-	new_fpga_cb *cb;
-	char *node;
-	char *serv;
-	void *user_data;
+    fpga_connection_info *f;
+    new_fpga_cb *cb;
+    char *node;
+    char *serv;
+    void *user_data;
 } open_fpga_conn_args;
 
 //Thread that opens a new connection and calls a callback with either 1) the
@@ -110,40 +110,40 @@ typedef struct _open_fpga_conn_args {
 //this thread takes care of freeing the args it was given, since it is not
 //intended to be used with pthread_join. I hope it doesn't block forever...
 static void* open_fpga_conn_thread(void *arg) {
-	new_fpga_cb_info ret;
-	int err_occurred = 0;
-	int sfd = -1;
-	
-	open_fpga_conn_args *args = (open_fpga_conn_args*)arg;
-	if (args == NULL) {
-		ret.f = NULL;
-		ret.error_str = DBG_GUV_NULL_ARG;
-		err_occurred = 1;
-		goto err_nothing;
-	}
-	
-	fpga_connection_info *f = args->f;
-	if (f == NULL) {
-		ret.f = NULL;
-		ret.error_str = DBG_GUV_NULL_CONN_INFO;
-		err_occurred = 1;
-		goto err_nothing;
-	} else {
-		ret.f = f;
-	}
-	
-	new_fpga_cb *cb = args->cb;
-	if (cb == NULL) {
-		ret.f = NULL;
-		ret.error_str = DBG_GUV_NULL_CB;
-		err_occurred = 1;
-		goto err_delete_f;
-	}
-	
-	if (args != NULL) ret.user_data = args->user_data;
-	
-	//Get address info
-	struct addrinfo *res = NULL;
+    new_fpga_cb_info ret;
+    int err_occurred = 0;
+    int sfd = -1;
+    
+    open_fpga_conn_args *args = (open_fpga_conn_args*)arg;
+    if (args == NULL) {
+        ret.f = NULL;
+        ret.error_str = DBG_GUV_NULL_ARG;
+        err_occurred = 1;
+        goto err_nothing;
+    }
+    
+    fpga_connection_info *f = args->f;
+    if (f == NULL) {
+        ret.f = NULL;
+        ret.error_str = DBG_GUV_NULL_CONN_INFO;
+        err_occurred = 1;
+        goto err_nothing;
+    } else {
+        ret.f = f;
+    }
+    
+    new_fpga_cb *cb = args->cb;
+    if (cb == NULL) {
+        ret.f = NULL;
+        ret.error_str = DBG_GUV_NULL_CB;
+        err_occurred = 1;
+        goto err_delete_f;
+    }
+    
+    if (args != NULL) ret.user_data = args->user_data;
+    
+    //Get address info
+    struct addrinfo *res = NULL;
     struct addrinfo hint = {
         .ai_family = AF_INET,
         .ai_socktype = SOCK_STREAM,
@@ -152,60 +152,60 @@ static void* open_fpga_conn_thread(void *arg) {
     
     int rc = getaddrinfo(args->node, args->serv, &hint, &res);
     if (rc < 0) {
-		//cursor_pos(1, term_rows-1);
+        //cursor_pos(1, term_rows-1);
         //sprintf(line, "Could not resolve [%s]: %s" ERASE_TO_END "%n", args->node, gai_strerror(rc), &len);
         //write(STDOUT_FILENO, line, len);
         ret.f = NULL;
         ret.error_str = gai_strerror(rc);
-		err_occurred = 1;
+        err_occurred = 1;
         goto err_delete_f;
     }
     
-	//Connect the socket
+    //Connect the socket
     sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd < 0) {
-		//cursor_pos(1, term_rows-1);
+        //cursor_pos(1, term_rows-1);
         //sprintf(line, "Could not open socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
         //write(STDOUT_FILENO, line, len);
         ret.f = NULL;
         ret.error_str = strerror(errno);
-		err_occurred = 1;
+        err_occurred = 1;
         goto err_freeaddrinfo;
     }
     f->sfd = sfd;
     
     rc = connect(sfd, res->ai_addr, res->ai_addrlen);
     if (rc < 0) {
-		//cursor_pos(1, term_rows-1);
+        //cursor_pos(1, term_rows-1);
         //sprintf(line, "Could not connect socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
         //write(STDOUT_FILENO, line, len);
         ret.f = NULL;
         ret.error_str = strerror(errno);
-		err_occurred = 1;
+        err_occurred = 1;
         goto err_close_socket;
     }
     
     freeaddrinfo(res);
     //Don't forget to mark as NULL so cleanup code can deal with it properly
     res = NULL;
-	
-	//Start the net_tx thread
+    
+    //Start the net_tx thread
     pthread_create(&f->net_tx, NULL, fpga_egress_thread, f);
     f->net_tx_started = 1;
-	
-	//Clean up and exit
-	if (!err_occurred) ret.error_str = DBG_GUV_SUCC;
+    
+    //Clean up and exit
+    if (!err_occurred) ret.error_str = DBG_GUV_SUCC;
 err_close_socket:
-	if (err_occurred) close(sfd);
+    if (err_occurred) close(sfd);
 err_freeaddrinfo:
     if (res != NULL) freeaddrinfo(res);
 err_delete_f:
-	if (err_occurred) del_fpga_connection(f);
+    if (err_occurred) del_fpga_connection(f);
 err_nothing:
-	free(args);
-	//Let the callback know what happened, if we have one
-	if(cb != NULL) cb(ret);
-	pthread_exit(NULL);
+    free(args);
+    //Let the callback know what happened, if we have one
+    if(cb != NULL) cb(ret);
+    pthread_exit(NULL);
 }
 
 ///////////////////////////////////////////
@@ -214,34 +214,34 @@ err_nothing:
 
 //(copy comments from header once I settle on them)
 int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data) {
-	if (!cb) {
-		return -1;
-	}
-	
-	fpga_connection_info *f = construct_fpga_connection();
-	if (!f) {
-		return -1;
-	}
+    if (!cb) {
+        return -1;
+    }
     
-	open_fpga_conn_args *args = malloc(sizeof(open_fpga_conn_args));
-	if (!args) {
-		del_fpga_connection(f);
-		return -1;
-	}
-	
-	args->f = f;
-	args->cb = cb;
-	args->node = node;
-	args->serv = serv;
-	args->user_data = user_data;
-	
-	//Spin up thread that opens connection
-	pthread_t tid;
-	pthread_create(&tid, NULL, open_fpga_conn_thread, args);
-	
-	//Note: we don't pthread_join. That thread (should) end itself at some
-	//point
-	return 0;
+    fpga_connection_info *f = construct_fpga_connection();
+    if (!f) {
+        return -1;
+    }
+    
+    open_fpga_conn_args *args = malloc(sizeof(open_fpga_conn_args));
+    if (!args) {
+        del_fpga_connection(f);
+        return -1;
+    }
+    
+    args->f = f;
+    args->cb = cb;
+    args->node = node;
+    args->serv = serv;
+    args->user_data = user_data;
+    
+    //Spin up thread that opens connection
+    pthread_t tid;
+    pthread_create(&tid, NULL, open_fpga_conn_thread, args);
+    
+    //Note: we don't pthread_join. That thread (should) end itself at some
+    //point
+    return 0;
 }
 
 void del_fpga_connection(fpga_connection_info *f) {
@@ -252,9 +252,9 @@ void del_fpga_connection(fpga_connection_info *f) {
     
     //We gave peace a chance, but really, make sure net_tx stops
     if (f->net_tx_started) {
-		pthread_cancel(f->net_tx);
-		pthread_join(f->net_tx, NULL);
-	}
+        pthread_cancel(f->net_tx);
+        pthread_join(f->net_tx, NULL);
+    }
     f->net_tx_started = 0;
     
     //Try locking and unlocking all mutexes to wait until last person 
@@ -263,10 +263,10 @@ void del_fpga_connection(fpga_connection_info *f) {
     //locking these mutexes later
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-		#ifndef DISABLE_WEIRD_LOCK
+        #ifndef DISABLE_WEIRD_LOCK
         pthread_mutex_lock(&f->logs_mutex[i]);
         pthread_mutex_unlock(&f->logs_mutex[i]);
-		#endif
+        #endif
         pthread_mutex_destroy(&f->logs_mutex[i]);
         
         //Slow as hell... there must be a better way...
@@ -274,15 +274,15 @@ void del_fpga_connection(fpga_connection_info *f) {
         //specifically does not malloc or free or copy anything. However, 
         //this fpga_connection_info cleanup assumes that non-NULL strings
         //should be freed. This is inconsistent. I should fix this 
-		linebuf *l = &f->logs[i].l;
+        linebuf *l = &f->logs[i].l;
         int j;
         for (j = 0; j < l->nlines; j++) {
-			#ifdef DEBUG_ON
-			if (l->lines[j] != NULL) {
-				fprintf(stderr, "Attempting to free %p = [%s]\n", l->lines[j], l->lines[j]);
-				fflush(stderr);
-			}
-			#endif
+            #ifdef DEBUG_ON
+            if (l->lines[j] != NULL) {
+                fprintf(stderr, "Attempting to free %p = [%s]\n", l->lines[j], l->lines[j]);
+                fflush(stderr);
+            }
+            #endif
             if (l->lines[j] != NULL) free(l->lines[j]);
         }
         
@@ -325,7 +325,7 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name) {
-	msg_win *m = get_msg_win(d);
+    msg_win *m = get_msg_win(d);
     msg_win_set_name(m, name);
 }
 
@@ -333,46 +333,46 @@ void dbg_guv_set_name(dbg_guv *d, char *name) {
 //way (currently) to avoid writing too much into buf. Should probably try
 //to improve this... returns -1 on error
 int draw_dbg_guv(dbg_guv *g, char *buf) {
-	//Sanity check inputs
-	if (g == NULL || buf == NULL) return -1;
-	
-	int num_written = 0;
-	
-	//First, draw the message window in the usual way
-	//Because draw_msg_win reads from a log, we have to lock the appropriate
-	//mutex:
-	pthread_mutex_t *mtx = get_msg_win_mutex(g);
-	pthread_mutex_lock(mtx);
-	//Actually draw the message window
-	msg_win *m = get_msg_win(g);
-	int incr = draw_msg_win(m, buf);
-	pthread_mutex_unlock(mtx);
-	//Cheeky hack: if draw_msg_win returned 0 (or negative) then there is 
-	//nothing for us to draw and we return early
-	if (incr <= 0) {
-		return incr;
-	}
-	
-	buf += incr;
-	num_written += incr;
-	
-	//Now we simply overwrite three characters on the message window to 
-	//indicate our status. It's not the most efficient, but it's not really
-	//that bad
+    //Sanity check inputs
+    if (g == NULL || buf == NULL) return -1;
+    
+    int num_written = 0;
+    
+    //First, draw the message window in the usual way
+    //Because draw_msg_win reads from a log, we have to lock the appropriate
+    //mutex:
+    pthread_mutex_t *mtx = get_msg_win_mutex(g);
+    pthread_mutex_lock(mtx);
+    //Actually draw the message window
+    msg_win *m = get_msg_win(g);
+    int incr = draw_msg_win(m, buf);
+    pthread_mutex_unlock(mtx);
+    //Cheeky hack: if draw_msg_win returned 0 (or negative) then there is 
+    //nothing for us to draw and we return early
+    if (incr <= 0) {
+        return incr;
+    }
+    
+    buf += incr;
+    num_written += incr;
+    
+    //Now we simply overwrite three characters on the message window to 
+    //indicate our status. It's not the most efficient, but it's not really
+    //that bad
     incr = cursor_pos_cmd(buf, m->x + m->w-1 -3, m->y);
     num_written += incr;
     buf += incr;
     
     if (g->values_unknown) {
-		*buf++ = '?';
-		*buf++ = '?';
-		*buf++ = '?';
-		num_written += 3;
-	} else {
-		*buf++ = g->keep_pausing ? 'P' : '-';
-		*buf++ = g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-');
-		*buf++ = g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-');
-		num_written += 3;
+        *buf++ = '?';
+        *buf++ = '?';
+        *buf++ = '?';
+        num_written += 3;
+    } else {
+        *buf++ = g->keep_pausing ? 'P' : '-';
+        *buf++ = g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-');
+        *buf++ = g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-');
+        num_written += 3;
     }
     
     return num_written;

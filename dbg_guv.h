@@ -36,7 +36,7 @@ typedef struct _dbg_guv {
 
 #define MAX_GUVS_PER_FPGA 32
 typedef struct _fpga_connection_info {
-	//Place to save logs
+    //Place to save logs
     msg_win logs[MAX_GUVS_PER_FPGA];
     pthread_mutex_t logs_mutex[MAX_GUVS_PER_FPGA];
     
@@ -58,15 +58,15 @@ typedef struct _fpga_connection_info {
 } fpga_connection_info;
 
 typedef struct _new_fpga_cb_info {
-	//If a connection was succesfully opened, a pointer to the allocated
-	//fpga_connection_info is stored here.
-	fpga_connection_info *f;
-	
-	//Otherwise, ret is NULL and here is some error information
-	char const *error_str;
-	
-	//User can put whatever they want here
-	void *user_data;
+    //If a connection was succesfully opened, a pointer to the allocated
+    //fpga_connection_info is stored here.
+    fpga_connection_info *f;
+    
+    //Otherwise, ret is NULL and here is some error information
+    char const *error_str;
+    
+    //User can put whatever they want here
+    void *user_data;
 } new_fpga_cb_info;
 
 typedef void new_fpga_cb(new_fpga_cb_info info);

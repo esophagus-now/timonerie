@@ -9,32 +9,32 @@
 
 //Initializes a statically allocated queue. Return -1 on error
 void init_queue(queue *q, int num_producers, int num_consumers) {
-	q->wr_pos = 0;
-	q->rd_pos = 0;
-	q->empty = 1;
-	q->full = 0;
-	pthread_mutex_init(&q->mutex, NULL);
-	pthread_cond_init(&q->can_cons, NULL);
-	pthread_cond_init(&q->can_prod, NULL);
-	q->num_consumers = num_consumers;
-	q->num_producers = num_producers;
+    q->wr_pos = 0;
+    q->rd_pos = 0;
+    q->empty = 1;
+    q->full = 0;
+    pthread_mutex_init(&q->mutex, NULL);
+    pthread_cond_init(&q->can_cons, NULL);
+    pthread_cond_init(&q->can_prod, NULL);
+    q->num_consumers = num_consumers;
+    q->num_producers = num_producers;
 }
 
 //Frees resources allocated by init_queue. Gracefully ignores NULL input
 void deinit_queue(queue *q) {
-	if (q == NULL) return;
-	q->num_consumers = -1;
-	q->num_producers = -1;
-	//Try to get threads to close gracefully
-	pthread_cond_broadcast(&q->can_cons);
-	pthread_cond_broadcast(&q->can_prod);
-	
-	//Does this even make sense?
-	sched_yield();
-	
-	pthread_mutex_destroy(&q->mutex);
-	pthread_cond_destroy(&q->can_cons);
-	pthread_cond_destroy(&q->can_prod);
+    if (q == NULL) return;
+    q->num_consumers = -1;
+    q->num_producers = -1;
+    //Try to get threads to close gracefully
+    pthread_cond_broadcast(&q->can_cons);
+    pthread_cond_broadcast(&q->can_prod);
+    
+    //Does this even make sense?
+    sched_yield();
+    
+    pthread_mutex_destroy(&q->mutex);
+    pthread_cond_destroy(&q->can_cons);
+    pthread_cond_destroy(&q->can_prod);
 }
 
 //Adds a char to queue q in a thread-safe way. Returns 0 on successful write,

@@ -205,10 +205,10 @@ void del_linebuf(linebuf *l);
 char *linebuf_append(linebuf *l, char *log);
 
 typedef struct _msg_win {
-	//Stores lines in the message window
-	linebuf l;
-	
-	//Display information
+    //Stores lines in the message window
+    linebuf l;
+    
+    //Display information
     char name[32];
     int x, y; 
     int w, h; //Minimum: 6 by 6?
