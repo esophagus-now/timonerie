@@ -60,10 +60,10 @@ typedef struct _fpga_connection_info {
 typedef struct _new_fpga_cb_info {
 	//If a connection was succesfully opened, a pointer to the allocated
 	//fpga_connection_info is stored here.
-	fpga_connection_info *ret;
+	fpga_connection_info *f;
 	
 	//Otherwise, ret is NULL and here is some error information
-	char *error_str;
+	char const *error_str;
 	
 	//User can put whatever they want here
 	void *user_data;

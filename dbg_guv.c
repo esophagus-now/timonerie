@@ -10,6 +10,7 @@
 #include <sched.h>
 #include "dbg_guv.h"
 #include "textio.h"
+#include "queue.h"
 
 char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
@@ -35,7 +36,7 @@ static inline pthread_mutex_t *get_msg_win_mutex(dbg_guv *g) {
 //Thread that manages outgoing network data. Empties fpga->egress queue
 //arg is a pointer to an fpga_connection_info struct
 static void* fpga_egress_thread(void *arg) {
-    fpga_connection_info *info = (fpga_connection_info *)v;
+    fpga_connection_info *info = (fpga_connection_info *)arg;
 	#ifdef DEBUG_ON
 	fprintf(stderr, "Entered net_tx (%p)\n", info);
 	#endif
@@ -47,7 +48,7 @@ static void* fpga_egress_thread(void *arg) {
 		pthread_exit(NULL);
 	}
 	
-	queue *q = info->egress;
+	queue *q = &info->egress;
     
     char cmd[4];
     while (dequeue_n(q, cmd, 4) == 0) {
@@ -90,7 +91,6 @@ static fpga_connection_info *construct_fpga_connection() {
         ret->guvs[i].addr = i;
     }
     
-    pthread_mutex_init(&ret->ingress.mutex, NULL);
     pthread_mutex_init(&ret->egress.mutex, NULL);
     
     return ret;
@@ -98,7 +98,7 @@ static fpga_connection_info *construct_fpga_connection() {
 
 //Struct for arguments to thread that opens a new connection
 typedef struct _open_fpga_conn_args {
-	fpga_connection_info *info;
+	fpga_connection_info *f;
 	new_fpga_cb *cb;
 	char *node;
 	char *serv;
@@ -109,23 +109,15 @@ typedef struct _open_fpga_conn_args {
 //completed fpga_connection_info struct or 2) an error message. By the way,
 //this thread takes care of freeing the args it was given, since it is not
 //intended to be used with pthread_join. I hope it doesn't block forever...
-static void open_fpga_conn_thread(void *v) {
+static void* open_fpga_conn_thread(void *arg) {
 	new_fpga_cb_info ret;
 	int err_occurred = 0;
 	int sfd = -1;
 	
-	open_fpga_conn_args *args = *(open_fpga_conn_args*)v;
+	open_fpga_conn_args *args = (open_fpga_conn_args*)arg;
 	if (args == NULL) {
 		ret.f = NULL;
 		ret.error_str = DBG_GUV_NULL_ARG;
-		err_occurred = 1;
-		goto err_nothing;
-	}
-	
-	new_fpga_cb *cb = args->cb;
-	if (cb == NULL) {
-		ret.f = NULL;
-		ret.error_str = DBG_GUV_NULL_CB;
 		err_occurred = 1;
 		goto err_nothing;
 	}
@@ -136,6 +128,14 @@ static void open_fpga_conn_thread(void *v) {
 		ret.error_str = DBG_GUV_NULL_CONN_INFO;
 		err_occurred = 1;
 		goto err_nothing;
+	}
+	
+	new_fpga_cb *cb = args->cb;
+	if (cb == NULL) {
+		ret.f = NULL;
+		ret.error_str = DBG_GUV_NULL_CB;
+		err_occurred = 1;
+		goto err_delete_f;
 	}
 	
 	if (args != NULL) ret.user_data = args->user_data;
@@ -156,7 +156,7 @@ static void open_fpga_conn_thread(void *v) {
         ret.f = NULL;
         ret.error_str = gai_strerror(rc);
 		err_occurred = 1;
-        goto err_nothing;
+        goto err_delete_f;
     }
     
 	//Connect the socket
@@ -170,7 +170,7 @@ static void open_fpga_conn_thread(void *v) {
 		err_occurred = 1;
         goto err_freeaddrinfo;
     }
-    args->sfd = sfd;
+    f->sfd = sfd;
     
     rc = connect(sfd, res->ai_addr, res->ai_addrlen);
     if (rc < 0) {
@@ -190,9 +190,8 @@ static void open_fpga_conn_thread(void *v) {
 	//Start the net_tx thread
 	f->egress.num_producers++;
 	f->egress.num_consumers++;
-    pthread_create(&args->tx_thread, NULL, net_tx, args);
+    pthread_create(&f->net_tx, NULL, fpga_egress_thread, args);
     f->net_tx_started = 1;
-    args->net_tx_started = 1;
 	
 	//Clean up and exit
 err_close_socket:
@@ -229,7 +228,7 @@ int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data
 		return -1;
 	}
 	
-	args->info = f;
+	args->f = f;
 	args->cb = cb;
 	args->node = node;
 	args->serv = serv;
@@ -260,7 +259,7 @@ void del_fpga_connection(fpga_connection_info *f) {
     sched_yield();
     
     //We gave peace a chance, but really, make sure net_tx stops
-    pthread_cancel(f->net_tx)
+    pthread_cancel(f->net_tx);
     pthread_join(f->net_tx, NULL);
     
     //We're done with the egress queue

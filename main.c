@@ -75,7 +75,7 @@ void got_rl_line(char *str) {
 			return;
 		} else if (f == NULL) {
 			cursor_pos(1, term_rows-1);
-			sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", cmd.error_str, &len);
+			sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", &len);
 			write(1, line, len);
 			return;
 		} else {
@@ -235,8 +235,7 @@ int main(int argc, char **argv) {
 	//Main event loop
     while(1) {
         int rc;
-        char c;
-        unsigned msg[2];        
+        char c;     
         
         //Get network data
         if (f != NULL) {
@@ -265,15 +264,13 @@ int main(int argc, char **argv) {
 				if (num_read != sizeof(msg)) {
 					old = msg_win_append(err_log, strdup("Did not read enough from network. This code could be a lot smarter!"));
 					if (old != NULL) free(old);
-					break;
 				} else {
 					unsigned addr = msg[0];
 					char *log_msg = malloc(32);
 					sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
+					old = append_log(f, addr, log_msg);
+					if (old != NULL) free(old);
 				}
-				
-				old = append_log(f, addr, log_msg);
-				if (old != NULL) free(old);
 			}
 			
 			if (pfd.revents & POLLHUP) {
@@ -411,32 +408,35 @@ int main(int argc, char **argv) {
                     }
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                     break;
-                case TEXTIO_GETCH_MOUSE:
-                    //Just for fun: use scrollwheel inside dbg_guv
-                    if (in.btn == TEXTIO_WUP) {
-                        if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                            if (g->buf_offset < g->l.nlines - g->h - 1) g->buf_offset++;
-                            g->need_redraw = 1;
-                        }
-                    } else if (in.btn == TEXTIO_WDN) {
-                        if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                            if (g->buf_offset > 0) g->buf_offset--;
-                            g->need_redraw = 1;
-                        }
-                    }
-                    
-                    if (in.btn == TEXTIO_WUP) {
-                        if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                            if (h->buf_offset < h->l.nlines - h->h - 1) h->buf_offset++;
-                            h->need_redraw = 1;
-                        }
-                    } else if (in.btn == TEXTIO_WDN) {
-                        if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                            if (h->buf_offset > 0) h->buf_offset--;
-                            h->need_redraw = 1;
-                        }
-                    }
-                    
+                case TEXTIO_GETCH_MOUSE: {
+					if (f != NULL) {
+						msg_win *g = &f->logs[0];
+						msg_win *h = &f->logs[1];
+						//Just for fun: use scrollwheel inside dbg_guv
+						if (in.btn == TEXTIO_WUP) {
+							if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
+								if (g->buf_offset < g->l.nlines - g->h - 1) g->buf_offset++;
+								g->need_redraw = 1;
+							}
+						} else if (in.btn == TEXTIO_WDN) {
+							if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
+								if (g->buf_offset > 0) g->buf_offset--;
+								g->need_redraw = 1;
+							}
+						}
+						
+						if (in.btn == TEXTIO_WUP) {
+							if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
+								if (h->buf_offset < h->l.nlines - h->h - 1) h->buf_offset++;
+								h->need_redraw = 1;
+							}
+						} else if (in.btn == TEXTIO_WDN) {
+							if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
+								if (h->buf_offset > 0) h->buf_offset--;
+								h->need_redraw = 1;
+							}
+						}
+					}
                     //Again: this is just for fun! This is not staying around permanently, I promise!
                     if (in.btn == TEXTIO_WUP) {
                         if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
@@ -460,6 +460,7 @@ int main(int argc, char **argv) {
                         &len);
                     break;
                 }
+                }
                 cursor_pos(1,1);
                 write(1, line, len);
                 if (mode == READLINE) {
@@ -479,10 +480,6 @@ int main(int argc, char **argv) {
     free_msg_win_logs(err_log);
     del_msg_win(err_log);
     
-    pthread_join(net_mgr, NULL);
-#ifdef DEBUG_ON
-    fprintf(stderr, "Joined net_mgr\n");
-#endif
     pthread_join(prod, NULL);
 #ifdef DEBUG_ON
     fprintf(stderr, "Joined prod\n");
