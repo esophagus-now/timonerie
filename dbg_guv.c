@@ -43,7 +43,7 @@ static void* fpga_egress_thread(void *arg) {
 	
     if (info == NULL) {
 		#ifdef DEBUG_ON
-		fprintf(stderr, "NULL argument to fpga_egress_thread!\n", info);
+		fprintf(stderr, "NULL argument to fpga_egress_thread!\n");
 		#endif
 		pthread_exit(NULL);
 	}
@@ -91,7 +91,7 @@ static fpga_connection_info *construct_fpga_connection() {
         ret->guvs[i].addr = i;
     }
     
-    pthread_mutex_init(&ret->egress.mutex, NULL);
+    init_queue(&ret->egress, 1, 1);
     
     return ret;
 }
@@ -128,6 +128,8 @@ static void* open_fpga_conn_thread(void *arg) {
 		ret.error_str = DBG_GUV_NULL_CONN_INFO;
 		err_occurred = 1;
 		goto err_nothing;
+	} else {
+		ret.f = f;
 	}
 	
 	new_fpga_cb *cb = args->cb;
@@ -188,12 +190,11 @@ static void* open_fpga_conn_thread(void *arg) {
     res = NULL;
 	
 	//Start the net_tx thread
-	f->egress.num_producers++;
-	f->egress.num_consumers++;
-    pthread_create(&f->net_tx, NULL, fpga_egress_thread, args);
+    pthread_create(&f->net_tx, NULL, fpga_egress_thread, f);
     f->net_tx_started = 1;
 	
 	//Clean up and exit
+	if (!err_occurred) ret.error_str = DBG_GUV_SUCC;
 err_close_socket:
 	if (err_occurred) close(sfd);
 err_freeaddrinfo:
@@ -221,7 +222,7 @@ int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data
 	if (!f) {
 		return -1;
 	}
-	
+    
 	open_fpga_conn_args *args = malloc(sizeof(open_fpga_conn_args));
 	if (!args) {
 		del_fpga_connection(f);
@@ -247,23 +248,14 @@ void del_fpga_connection(fpga_connection_info *f) {
     //Gracefully quit early if f is NULL
     if (f == NULL) return;
     
-    pthread_mutex_lock(&f->egress.mutex);
-    f->egress.num_consumers = -1;
-    f->egress.num_producers = -1;
-    pthread_mutex_unlock(&f->egress.mutex);
-    
-    //Not sure if this is needed, but make sure we allow threads on this
-    //queue to exit gracefully
-    pthread_cond_broadcast(&f->egress.can_cons);
-    pthread_cond_broadcast(&f->egress.can_prod);
-    sched_yield();
+    deinit_queue(&f->egress);
     
     //We gave peace a chance, but really, make sure net_tx stops
-    pthread_cancel(f->net_tx);
-    pthread_join(f->net_tx, NULL);
-    
-    //We're done with the egress queue
-    pthread_mutex_destroy(&f->egress.mutex);
+    if (f->net_tx_started) {
+		pthread_cancel(f->net_tx);
+		pthread_join(f->net_tx, NULL);
+	}
+    f->net_tx_started = 0;
     
     //Try locking and unlocking all mutexes to wait until last person 
     //relinquishes it
@@ -282,9 +274,16 @@ void del_fpga_connection(fpga_connection_info *f) {
         //specifically does not malloc or free or copy anything. However, 
         //this fpga_connection_info cleanup assumes that non-NULL strings
         //should be freed. This is inconsistent. I should fix this 
+		linebuf *l = &f->logs[i].l;
         int j;
-        for (j = 0; j < f->logs[i].l.nlines; j++) {
-            if (f->logs[i].l.lines[j] != NULL) free(f->logs[i].l.lines[j]);
+        for (j = 0; j < l->nlines; j++) {
+			#ifdef DEBUG_ON
+			if (l->lines[j] != NULL) {
+				fprintf(stderr, "Attempting to free %p = [%s]\n", l->lines[j], l->lines[j]);
+				fflush(stderr);
+			}
+			#endif
+            if (l->lines[j] != NULL) free(l->lines[j]);
         }
         
         //Free up the stuff from the message window

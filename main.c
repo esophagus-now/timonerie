@@ -53,7 +53,6 @@ void* producer(void *v) {
 }
 
 fpga_connection_info *f = NULL;
-queue *net_egress = NULL;
 
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
@@ -149,9 +148,9 @@ void got_rl_line(char *str) {
 		}
         
         //Actually send the command
-        queue_write(net_egress, (char*) &cmd.addr, sizeof(cmd.addr));
+        queue_write(&f->egress, (char*) &cmd.addr, sizeof(cmd.addr));
         if (cmd.has_param)
-			queue_write(net_egress, (char*) &cmd.param, sizeof(cmd.param));
+			queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
 		
 		//Done!
 		//For now, until I have code that properly handles command receipts,
@@ -174,6 +173,7 @@ void callback(new_fpga_cb_info info) {
 		sprintf(line, "Could not connect to FPGA: %s", info.error_str);
 		char *old = msg_win_append(err_log, strdup(line));
 		if (old != NULL) free(old);
+		return;
 	}
 	
 	msg_win *g = &f->logs[0];
@@ -243,17 +243,8 @@ int main(int argc, char **argv) {
 				.fd = f->sfd,
 				.events = POLLIN | POLLHUP
 			};
-			#ifdef DEBUG_ON
-			fprintf(stderr, "Starting poll!\n");
-			fflush(stderr);
-			#endif
 			
 			rc = poll(&pfd, 1, 0);
-			
-			#ifdef DEBUG_ON
-			fprintf(stderr, "Poll finished!\n");
-			fflush(stderr);
-			#endif
 			
 			if (pfd.revents & POLLIN) {
 				int num_read;
@@ -361,6 +352,7 @@ int main(int argc, char **argv) {
             
             //Cross your fingers that this works!
             del_fpga_connection(f);
+            f = NULL;
             break;
         } else {
             if (mode == READLINE) {

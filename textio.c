@@ -963,6 +963,15 @@ void msg_win_set_name(msg_win *m, char *name) {
     m->name[31] = 0; //For extra safety
 }
 
+//Calls linebuf_append(&m->l, log). No strings are ever copied or freed. 
+//This will also return any old logs that were "dislodged" by the new one.
+//Finally, a redraw is triggered,
+char* msg_win_append(msg_win *m, char *log) {
+	char *ret = linebuf_append(&m->l, log);
+	m->need_redraw = 1;
+	return ret;
+}
+
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this... returns -1 on error.
 int draw_msg_win(msg_win *m, char *buf) {

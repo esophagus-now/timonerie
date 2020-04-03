@@ -245,10 +245,10 @@ void free_msg_win_logs(msg_win *m);
 //Duplicates string in name (if non-NULL) and saves it into m. 
 void msg_win_set_name(msg_win *m, char *name);
 
-//Macro that calls linebuf_append(&m->l, log). No strings are ever copied 
-//or freed. This will also return any old logs that were "dislodged" by the
-//new one
-#define msg_win_append(m_ptr, log) linebuf_append(&m_ptr->l, log)
+//Calls linebuf_append(&m->l, log). No strings are ever copied or freed. 
+//This will also return any old logs that were "dislodged" by the new one.
+//Finally, a redraw is triggered,
+char* msg_win_append(msg_win *m, char *log);
 
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this... returns -1 on error.
