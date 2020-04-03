@@ -299,6 +299,9 @@ void got_rl_line(char *str) {
 			queue_write(net_egress, (char*) &cmd.param, sizeof(cmd.param));
 		
 		//Done!
+		//For now, until I have code that properly handles command receipts,
+		//just pretend that we know the values
+		g->values_unknown = 0;
     }
     
     free(str);
