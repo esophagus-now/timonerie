@@ -223,6 +223,23 @@ void got_rl_line(char *str) {
 			sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
 			write(1, line, len);
 			return;
+		} else {
+			cursor_pos(1, term_rows-1);
+			if (cmd.type == LATCH) {
+				sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
+					cmd.dbg_guv_addr,
+					&len
+				);
+			} else {
+				sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
+					cmd.param, 
+					cmd.param,
+					cmd.dbg_guv_addr,
+					DBG_GUV_REG_NAMES[cmd.type],
+					&len
+				);
+			}
+			write(1, line, len);
 		}
 		
         add_history(str);

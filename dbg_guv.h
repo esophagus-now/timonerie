@@ -64,6 +64,8 @@ typedef struct _dbg_guv {
 //At the moment, does not try to connect to the FPGA or start any threads
 fpga_connection_info *new_fpga_connection(char *node, char *serv);
 
+//Cleans up an FPGA connection. Note that it will block as it waits for 
+//threads to close; do NOT call while holdign a mutex!
 void del_fpga_connection(fpga_connection_info *f);
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
@@ -83,5 +85,11 @@ void dbg_guv_set_name(dbg_guv *d, char *name);
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this...
 int draw_dbg_guv(dbg_guv *g, char *buf);
+
+//Not sure if I'll keep this function. Anyway, it's just a helper function 
+//to reset the dbg_guv
+//TODO: it would be better to add a readback command so that restarting
+//timonerie doesn't disturb the in-place debug setup
+//int enqueue_dbg_guv_rst_cmds(dbg_guv *g, queue *q);
 
 #endif
