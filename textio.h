@@ -166,6 +166,90 @@ void enable_mouse_reporting();
 
 void disable_mouse_reporting();
 
+////////////////////////
+//Srolling text window//
+////////////////////////
+//This is essentially a circular buffer, but there is only one writer which
+//just constantly overwrites old data. Also, the reader can read whatever they
+//want, usually at some fixed offset from pos
+typedef struct _linebuf {
+    char **lines;   //Array of strings
+    int pos;        //Where we will put our next string
+    int nlines;     //Number of strings in the linebuffer
+    
+    //Error information
+    char const *error_str;
+} linebuf;
+
+//Statically initialize a linebuf. Returns 0 on success, negative on error.
+//In fact, -1 on general error (and sets l->error_str accordingly) and -2
+//if l is NULL
+//Assumes *l is empty.
+//NOTE: all log entries are initialized to NULL
+int init_linebuf(linebuf *l, int nlines);
+
+//Dynamically allocate and initialize a linebuf. Returns NULL on error. 
+//NOTE: all log entries are initialized to NULL
+linebuf *new_linebuf(int nlines);
+
+//Frees memory allocated with init_linebuf. Gracefully ignores NULL input
+void deinit_linebuf(linebuf *l);
+
+//Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
+void del_linebuf(linebuf *l);
+
+//Overwrites the oldest log in l with input log. DOES NOT COPY ANYTHING! 
+//Returns what was previously there, or NULL on error (and l->error_str 
+//will be set if possible). NOTE: all logs initially in l are guaranteed to 
+//start off as NULL, but can become non-NULL when you start appending things.
+char *linebuf_append(linebuf *l, char *log);
+
+typedef struct _msg_win {
+	//Stores lines in the message window
+	linebuf l;
+	
+	//Display information
+    char name[32];
+    int x, y; 
+    int w, h; //Minimum: 6 by 6?
+    int buf_offset; //Where to start reading from linebuffer
+    int need_redraw;
+    int visible;
+    
+    //Error information
+    char const *error_str;
+} msg_win;
+
+//Statically initialize a msg_win. If name is not NULL, this name is copied
+//into the msg_win struct. Returns 0 on success, negative on error.
+//In fact, -1 on general error (and sets l->error_str accordingly) and -2
+//if m is NULL
+//NOTE: all log entries are initialized to NULL
+//NOTE: all log entries are initialized to NULL
+int init_msg_win(msg_win *m, char const *name);
+
+//Dynamically allocate and initialize a linebuf. Returns NULL on error. 
+//NOTE: all log entries are initialized to NULL
+msg_win* new_msg_win(char const *name);
+
+//Frees memory allocated with init_msg_win. Gracefully ignores NULL input
+void deinit_msg_win(msg_win *m);
+
+//Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
+void del_msg_win(msg_win *m);
+
+//Duplicates string in name (if non-NULL) and saves it into m. 
+void msg_win_set_name(msg_win *m, char *name);
+
+//Macro that calls linebuf_append(&m->l, log). No strings are ever copied 
+//or freed. This will also return any old logs that were "dislodged" by the
+//new one
+#define msg_win_append(m_ptr, log) linebuf_append(&m_ptr->l, log)
+
+//Returns number of bytes added into buf. Not really safe, should probably try
+//to improve this... returns -1 on error.
+int draw_msg_win(msg_win *m, char *buf);
+
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//
 //////////////////////////////////////////////////
@@ -183,5 +267,9 @@ extern char const *const TEXTIO_TOO_MANY_PARAMS;
 extern char const *const TEXTIO_IMPOSSIBLE;
 extern char const *const TEXTIO_BAD_TILDE_CODE;
 extern char const *const TEXTIO_BAD_MODIFIER_CODE;
+extern char const *const TEXTIO_INVALID_PARAM;
+extern char const *const TEXTIO_OOM;
+extern char const *const TEXTIO_MSG_WIN_TOO_SMALL;
+
 
 #endif

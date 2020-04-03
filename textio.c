@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <readline/readline.h>
+#include <string.h> //For strncpy
 #include <signal.h> //To get access to SIGWINCH
 #include <unistd.h> //isatty
 #include <sys/ioctl.h> //ioctl, in order to get terminal size
@@ -46,6 +47,9 @@ char const *const TEXTIO_TOO_MANY_PARAMS = "too many parameters in escape sequen
 char const *const TEXTIO_IMPOSSIBLE = "TEXTIO library got to a place in the code that Marco thought was impossible to reach";
 char const *const TEXTIO_BAD_TILDE_CODE = "bad code in ^[[#~ or ^[[#;#~ sequence";
 char const *const TEXTIO_BAD_MODIFIER_CODE = "bad modifier code";
+char const *const TEXTIO_INVALID_PARAM = "invalid parameter";
+char const *const TEXTIO_OOM = "out of memory";
+char const *const TEXTIO_MSG_WIN_TOO_SMALL = "message window too small";
 
 void cursor_pos(int x, int y) {
     char line[80];
@@ -757,4 +761,243 @@ unicode_char:
     scrResetReturn(-1);
     
     scrFinish(-1);
+}
+
+////////////////////////
+//Srolling text window//
+////////////////////////
+
+//Statically initialize a linebuf. Returns 0 on success, negative on error.
+//In fact, -1 on general error (and sets l->error_str accordingly) and -2
+//if l is NULL
+//Assumes *l is empty.
+//NOTE: all log entries are initialized to NULL
+int init_linebuf(linebuf *l, int nlines) {
+	//Sanity-check inputs
+	if (l == NULL) return -2; //This is all we can do
+	if (nlines < 0) {
+		l->error_str = TEXTIO_INVALID_PARAM;
+		return -1;
+	}
+	
+	//Allocate the lines array
+	l->lines = calloc(nlines, sizeof(char *));
+	
+	//Set the remaining struct values
+	l->pos = 0;
+	l->nlines = nlines;
+	
+	l->error_str = TEXTIO_SUCC;
+	return 0;
+}
+
+//Dynamically allocate and initialize a linebuf. Returns NULL on error. 
+//NOTE: all log entries are initialized to NULL
+linebuf *new_linebuf(int nlines) {
+	//Sanity-check inputs
+	if (nlines < 0) {
+		return NULL; //This is all we can do
+	}
+	
+	linebuf *l = malloc(sizeof(linebuf));
+	
+	if (!l) return NULL;
+	
+	int rc = init_linebuf(l, nlines);
+	if (rc < 0) {
+		free(l);
+		return NULL;
+	}
+	
+	l->error_str = TEXTIO_SUCC;
+	return l;
+}
+
+//Frees memory allocated with init_linebuf. Gracefully ignores NULL input
+void deinit_linebuf(linebuf *l) {
+	if (!l) return;
+	
+	if (!l->lines || l->nlines == 0) return;
+	
+	free(l->lines);
+	//Just for extra safety
+	l->lines = NULL;
+	l->nlines = 0;
+	
+	l->error_str = TEXTIO_SUCC;
+	return;
+}
+
+//Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
+void del_linebuf(linebuf *l) {
+	if (!l) return;
+	
+	deinit_linebuf(l);
+	
+	free(l);
+	
+	return;
+}
+
+//Overwrites the oldest log in l with input log. DOES NOT COPY ANYTHING! 
+//Returns what was previously there, or NULL on error (and l->error_str 
+//will be set if possible). NOTE: all logs initially in l are guaranteed to 
+//start off as NULL, but can become non-NULL when you start appending things.
+char *linebuf_append(linebuf *l, char *log) {
+    if (l == NULL) return NULL;
+    
+    char *ret = l->lines[l->pos];
+    l->lines[l->pos++] = log;
+    if (l->pos == l->nlines) l->pos = 0;
+    
+    return ret;
+}
+
+#define SCROLLBACK 1000
+
+//Statically initialize a msg_win. If name is not NULL, this name is copied
+//into the msg_win struct. Returns 0 on success, negative on error.
+//In fact, -1 on general error (and sets l->error_str accordingly) and -2
+//if m is NULL
+//NOTE: all log entries are initialized to NULL
+int init_msg_win(msg_win *m, char const *name) {
+	//Sanity check on inputs
+	if (m == NULL) {
+		return -2; //This is all we can do
+	}
+	
+	//For now, msg_wins have SCROLLBACK lines of scrollback
+	int rc = init_linebuf(&m->l, SCROLLBACK); //Note: guaranteed that &m->l is not NULL
+	if (rc < 0) {
+		//Propagate error upward
+		m->error_str = m->l.error_str;
+		return -1;
+	}
+	
+	//Copy name if one was given
+	if (name != NULL) {
+		strncpy(m->name, name, 31);
+		m->name[32] = 0; //For extra safety
+	} else {
+		snprintf(m->name, 32, "msg_win@%p", m);
+		m->name[32] = 0; //For extra safety
+	}
+	
+	//Give reasonable defaults to position and size
+	m->x = 1;
+	m->y = 1;
+	m->w = 14;
+	m->h = 6;
+	//By default, show most recent messages
+	m->buf_offset = 0;
+	//Make sure we get drawn
+	m->need_redraw = 1;
+	//By default, don't show ourselves
+	m->visible = 0;
+	
+	//All done with no errors
+	m->error_str = TEXTIO_SUCC;
+	return 0;
+}
+
+//Dynamically allocate and initialize a linebuf. Returns NULL on error. 
+//NOTE: all log entries are initialized to NULL
+msg_win* new_msg_win(char const *name) {
+	msg_win *m = malloc(sizeof(msg_win));
+	
+	if (!m) return NULL;
+	
+	int rc = init_msg_win(m, name);
+	if (rc < 0) {
+		free(m);
+		return NULL;
+	}
+	
+	m->error_str = TEXTIO_SUCC;
+	return m;
+}
+
+//Frees memory allocated with init_msg_win. Gracefully ignores NULL input
+void deinit_msg_win(msg_win *m) {
+	if (!m) return;
+	
+	deinit_linebuf(&m->l);
+	
+	//Try to prevent anyone from trying to read msg_win.linebuf contents
+	m->need_redraw = 0;
+	
+	m->error_str = TEXTIO_SUCC;
+	return;
+}
+
+//Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
+void del_msg_win(msg_win *m) {
+	if (!m) return;
+	
+	deinit_linebuf(&m->l);
+	
+	free(m);
+	
+	return;
+}
+
+//Duplicates string in name (if non-NULL) and saves it into m. 
+void msg_win_set_name(msg_win *m, char *name) {
+	if (name == NULL) return;
+    strncpy(m->name, name, 32);
+    m->name[31] = 0; //For extra safety
+}
+
+//Returns number of bytes added into buf. Not really safe, should probably try
+//to improve this... returns -1 on error.
+int draw_msg_win(msg_win *m, char *buf) {
+    //Check if we need a redraw
+    if (m->need_redraw == 0 || m->visible == 0) return 0;
+    if (m->w < 12 || m->h < 6) {
+		m->need_redraw = 0;
+		m->error_str = TEXTIO_MSG_WIN_TOO_SMALL;
+        return -1;
+    }
+    char *buf_saved = buf;
+    //Draw top row
+    //Move to top-left
+    int incr = cursor_pos_cmd(buf, m->x, m->y);
+    buf += incr;
+    int len;
+    sprintf(buf, "+%.*s-%n",
+        m->w - 6,
+        m->name,
+        &len
+    );
+    buf += len;
+    int i;
+    for (i = len; i < m->w - 1; i++) *buf++ = '-';
+    *buf++ = '+';
+    
+    //Draw logs and box edges
+    for (i = m->h-2-1; i >= 0; i--) {
+        //Move the cursor
+        incr = cursor_pos_cmd(buf, m->x, m->y + 1 + (m->h-2-1 - i)); //I hope there's no OBOE
+        buf += incr;
+        
+        //Compute index into line buffer's scrollback 
+        int ind = m->l.pos - 1 - m->buf_offset - i;
+        //wrap into the right range (it's circular buffer)
+        ind = (ind + m->l.nlines) % m->l.nlines;
+        
+        //Construct the string that we will print
+        sprintf(buf, "|%-*.*s|%n", m->w-2, m->w-2, m->l.lines[ind], &incr);
+        buf += incr;        
+    }    
+    
+    //Draw bottom row
+    //Move to bottom-left
+    incr = cursor_pos_cmd(buf, m->x, m->y + m->h - 1);
+    buf += incr;
+    *buf++ = '+';
+    for (i = 1; i < m->w - 1; i++) *buf++ = '-';
+    *buf++ = '+';
+    
+    m->need_redraw = 0;
+    return buf - buf_saved;
 }

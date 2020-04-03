@@ -1,24 +1,54 @@
-#include "dbg_guv.h"
-#include "textio.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "dbg_guv.h"
+#include "textio.h"
+
+//Little helper functions
+static inline msg_win *get_msg_win(dbg_guv *g) {
+	fpga_connection_info *f = g->parent;
+	return &f->logs[g->addr];
+}
+
+static inline pthread_mutex_t *get_msg_win_mutex(dbg_guv *g) {
+	fpga_connection_info *f = g->parent;
+	return &f->logs_mutex[g->addr];
+}
 
 fpga_connection_info *new_fpga_connection(char *node, char *serv) {
+	//TODO: sanity check inputs
+	
     fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
-    memset(&ret->logs, 0, sizeof(ret->logs));
+    if (!ret) return NULL;
+    
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
+		int rc = init_msg_win(&(ret->logs[i]), NULL);
+		if (rc < 0) {
+			fprintf(stderr, "Could not allocate a msg_win while constructing fpga_connection_info: %s\n", ret->logs[i].error_str);
+			//Clean up everything we allocated so far
+			int j;
+			for (j = i - 1; j >= 0; j--) {
+				pthread_mutex_destroy(&ret->logs_mutex[j]);
+			}
+			free(ret);
+			return NULL;
+		}
+		
         pthread_mutex_init(&ret->logs_mutex[i], NULL);
-        ret->guvs[i] = new_dbg_guv(NULL);
+        
+        ret->guvs[i].parent = ret;
+        ret->guvs[i].addr = i;
     }
     
     pthread_mutex_init(&ret->ingress.mutex, NULL);
     pthread_mutex_init(&ret->egress.mutex, NULL);
+    
+    //TODO: open up socket and spin up network management threads
+    
     return ret;
 }
-
 
 void del_fpga_connection(fpga_connection_info *f) {
     //Gracefully quit early if f is NULL
@@ -46,12 +76,16 @@ void del_fpga_connection(fpga_connection_info *f) {
         pthread_mutex_destroy(&f->logs_mutex[i]);
         
         //Slow as hell... there must be a better way...
+        //Also, I've gotten into trouble here. The append_log function
+        //specifically does not malloc or free or copy anything. However, 
+        //this fpga_connection_info cleanup assumes that non-NULL strings
+        //should be freed. This is inconsistent. I should fix this 
         int j;
-        for (j = 0; j < SCROLLBACK; j++) {
-            if (f->logs[i].lines[j] != NULL) free(f->logs[i].lines[j]);
+        for (j = 0; j < f->logs[i].l.nlines; j++) {
+            if (f->logs[i].l.lines[j] != NULL) free(f->logs[i].l.lines[j]);
         }
         
-        if (f->guvs[i] != NULL) free(f->guvs[i]);
+        deinit_msg_win(&f->logs[i]);
     }
     
     free(f);
@@ -74,7 +108,6 @@ void* fpga_log_thread(void *arg) {
 //arg is a pointer to an fpga_connection_info struct
 void* fpga_egress_thread(void *arg) {
     return NULL;
-    
 }
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
@@ -84,107 +117,58 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
         return NULL;
     }
     pthread_mutex_lock(&f->logs_mutex[addr]);
-    linebuf *l = f->logs + addr;
-    char *ret = l->lines[l->pos];
-    l->lines[l->pos++] = log;
-    if (l->pos == SCROLLBACK) l->pos = 0;
+    msg_win *m = f->logs + addr;
+    char *ret = msg_win_append(m, log);
     pthread_mutex_unlock(&f->logs_mutex[addr]);
     
     return ret;
 }
 
-dbg_guv* new_dbg_guv(char *name) {
-    dbg_guv *ret = malloc(sizeof(dbg_guv));
-    memset(ret, 0, sizeof(dbg_guv));
-    
-    if (name != NULL) {
-        ret->name = strdup(name);
-    }
-    ret->w = 6;
-    ret->h = 6;
-    
-    return ret;
-}
-
-void del_dbg_guv(dbg_guv *d) {
-    if (d != NULL) {
-        if (d->name != NULL) free(d->name);
-        free(d);
-    }
-}
-
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name) {
-    if (d->name != NULL) free(d->name);
-    d->name = strdup(name);
+	msg_win *m = get_msg_win(d);
+    msg_win_set_name(m, name);
 }
 
-//Returns number of bytes added into buf. Not really safe, should probably try
+//Returns number of bytes added into buf. Not really safe since there is no
+//way (currently) to avoid writing too much into buf. Should probably try
 //to improve this... returns -1 on error
 int draw_dbg_guv(dbg_guv *g, char *buf) {
-    //Check if we need a redraw
-    if (g->need_redraw == 0) return 0;
-    if (g->w < 12 || g->h < 6) {
-        return -1;
-    }
-    char *buf_saved = buf;
-    //Draw top row
-    //Move to top-left
-    int incr = cursor_pos_cmd(buf, g->x, g->y);
+	//Sanity check inputs
+	if (g == NULL || buf == NULL) return -1;
+	
+	int num_written = 0;
+	
+	//First, draw the message window in the usual way
+	//Because draw_msg_win reads from a log, we have to lock the appropriate
+	//mutex:
+	pthread_mutex_t *mtx = get_msg_win_mutex(g);
+	pthread_mutex_lock(mtx);
+	//Actually draw the message window
+	msg_win *m = get_msg_win(g);
+	int incr = draw_msg_win(m, buf);
+	pthread_mutex_unlock(mtx);
+	//Cheeky hack: if draw_msg_win returned 0 (or negative) then there is 
+	//nothing for us to draw and we return early
+	if (incr <= 0) {
+		return incr;
+	}
+	
+	buf += incr;
+	num_written += incr;
+	
+	//Now we simply overwrite three characters on the message window to 
+	//indicate our status. It's not the most efficient, but it's not really
+	//that bad
+    incr = cursor_pos_cmd(buf, m->x + m->w-1 -3, m->y);
+    num_written += incr;
     buf += incr;
-    int len;
-    sprintf(buf, "+%.*s-%n",
-        g->w - 6,
-        g->name,
-        &len
-    );
-    buf += len;
-    int i;
-    for (i = len; i < g->w - 4; i++) *buf++ = '-';
-    sprintf(buf, "%c%c%c+",
-        g->keep_pausing ? 'P' : '-',
-        g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-'),
-        g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-')
-    );
-    buf += 4;
     
-    //This method is "more efficient", but not well supported
-    //sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
-    //buf += incr;
+    *buf++ = g->keep_pausing ? 'P' : '-';
+    *buf++ = g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-');
+    *buf++ = g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-');
+    num_written += 3;
     
-    //Draw logs and box edges
-    //First get a handle to the line buffer for this dbg_guv
-    linebuf *l = &(g->parent->logs[g->addr]);
-    //Grab mutex for this buffer while we read it
-    pthread_mutex_lock(&(g->parent->logs_mutex[g->addr]));
-    for (i = g->h-2-1; i >= 0; i--) {
-        //Move the cursor
-        incr = cursor_pos_cmd(buf, g->x, g->y + 1 + (g->h-2-1 - i)); //I hope there's no OBOE
-        buf += incr;
-        
-        //Compute index into line buffer's scrollback 
-        int ind = l->pos - 1 - g->buf_offset - i;
-        //wrap into the right range (it's circular buffer)
-        ind = (ind + SCROLLBACK) % SCROLLBACK;
-        
-        //Construct the string that we will print
-        sprintf(buf, "|%-*.*s|%n", g->w-2, g->w-2, l->lines[ind], &incr);
-        buf += incr;        
-    }
-    pthread_mutex_unlock(&(g->parent->logs_mutex[g->addr]));
-    
-    
-    //Draw bottom row
-    //Move to bottom-left
-    incr = cursor_pos_cmd(buf, g->x, g->y + g->h - 1);
-    buf += incr;
-    *buf++ = '+';
-    for (i = 1; i < g->w - 1; i++) *buf++ = '-';
-    *buf++ = '+';
-    //sprintf(buf, "+-\x1b[%db+%n", g->w - 3, &incr);
-    //buf += incr;
-    
-    g->need_redraw = 0;
-    return buf - buf_saved;
+    return num_written;
 }

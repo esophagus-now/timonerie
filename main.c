@@ -243,7 +243,8 @@ void got_rl_line(char *str) {
 		}
 		
         add_history(str);
-        dbg_guv *g = f->guvs[cmd.dbg_guv_addr];
+        dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
+        msg_win *m = &f->logs[cmd.dbg_guv_addr];
         //Seems silly to do yet another switch statement after the one in
         //parse_dbg_cmd... but anyway, it decouples the two bits of code
         //so it's easier for me to change it later if I have to
@@ -285,7 +286,7 @@ void got_rl_line(char *str) {
 			g->dut_reset = cmd.param;
 			break;
 		case LATCH:
-			g->need_redraw = 1;
+			m->need_redraw = 1;
 			break;
 		default:
 			//Just here to get rid of warning for not using everything in the enum
@@ -345,23 +346,21 @@ int main(int argc, char **argv) {
     
     f = new_fpga_connection(NULL, NULL);
     
-    dbg_guv *g = f->guvs[0];
+    msg_win *g = &f->logs[0];
     g->x = 1;
     g->y = 7;
     g->w = 30;
     g->h = 7;
-    g->parent = f;
-    g->addr = 0;
-    dbg_guv_set_name(g, "FIZZCNT");
+    g->visible = 1;
+    msg_win_set_name(g, "FIZZCNT");
     
-    dbg_guv *h = f->guvs[1];
+    msg_win *h = &f->logs[1];
     h->x = 32;
     h->y = 7;
     h->w = 30;
     h->h = 7;
-    h->parent = f;
-    h->addr = 1;
-    dbg_guv_set_name(h, "FIZZBUZZ");
+    h->visible = 1;
+    msg_win_set_name(h, "FIZZBUZZ");
         
     char line[1024];
     int len = 0;
@@ -392,7 +391,7 @@ int main(int argc, char **argv) {
             if (old != NULL) free(old);
         }   
         
-        len = draw_dbg_guv(g, line);
+        len = draw_dbg_guv(&f->guvs[0], line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -401,7 +400,7 @@ int main(int argc, char **argv) {
             }
         }
         
-        len = draw_dbg_guv(h, line);
+        len = draw_dbg_guv(&f->guvs[1], line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -517,7 +516,7 @@ int main(int argc, char **argv) {
                     //Just for fun: use scrollwheel inside dbg_guv
                     if (in.btn == TEXTIO_WUP) {
                         if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                            if (g->buf_offset < SCROLLBACK - g->h - 1) g->buf_offset++;
+                            if (g->buf_offset < g->l.nlines - g->h - 1) g->buf_offset++;
                             g->need_redraw = 1;
                         }
                     } else if (in.btn == TEXTIO_WDN) {
@@ -529,7 +528,7 @@ int main(int argc, char **argv) {
                     
                     if (in.btn == TEXTIO_WUP) {
                         if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                            if (h->buf_offset < SCROLLBACK - h->h - 1) h->buf_offset++;
+                            if (h->buf_offset < h->l.nlines - h->h - 1) h->buf_offset++;
                             h->need_redraw = 1;
                         }
                     } else if (in.btn == TEXTIO_WDN) {
