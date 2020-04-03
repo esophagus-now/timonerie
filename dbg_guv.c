@@ -260,7 +260,8 @@ void del_fpga_connection(fpga_connection_info *f) {
     sched_yield();
     
     //We gave peace a chance, but really, make sure net_tx stops
-    pthread_cancel(&f->net_tx)
+    pthread_cancel(f->net_tx)
+    pthread_join(f->net_tx, NULL);
     
     //We're done with the egress queue
     pthread_mutex_destroy(&f->egress.mutex);
@@ -300,15 +301,15 @@ void* fpga_ingress_thread(void *arg) {
     return NULL;
 }
 
-//Thread that dispatches data in ingress queue to appropriate linebuffer
-//arg is a pointer to an fpga_connection_info struct
-void* fpga_log_thread(void *arg) {
-    return NULL;
-    
-}
+//Note to self (before I forget) in the main thread, we'll have an array of
+//pollfd structs for the call to poll. We'll keep a parallel array F where
+//F[i] is a pointer to the fpga_connection_info struct that manages the fd
+//in pollfd[i]
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
-//do NOT call this function if you are holding a mutex!
+//do NOT call this function if you are holding a mutex! By the way, does NOT
+//make an internal copy of the string; you must copy it yourself if this is
+//desired
 char *append_log(fpga_connection_info *f, int addr, char *log) {
     if (addr < 0 || addr > MAX_GUVS_PER_FPGA) {
         return NULL;
@@ -317,6 +318,8 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
     msg_win *m = f->logs + addr;
     char *ret = msg_win_append(m, log);
     pthread_mutex_unlock(&f->logs_mutex[addr]);
+    
+    m->need_redraw = 1;
     
     return ret;
 }

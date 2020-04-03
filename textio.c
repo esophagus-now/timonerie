@@ -941,6 +941,21 @@ void del_msg_win(msg_win *m) {
 	return;
 }
 
+//If the strings you've saved in m are allocated with malloc, you can use
+//this helper function to free them all
+void free_msg_win_logs(msg_win *m) {
+	int i;
+	
+	//Cleans up the code a little
+	linebuf *l = &m->l;
+	
+	for (i = 0; i < l->nlines; i++) {
+		if (l->lines[i] != NULL) free(l->lines[i]);
+	}
+	
+	l->nlines = 0;
+}
+
 //Duplicates string in name (if non-NULL) and saves it into m. 
 void msg_win_set_name(msg_win *m, char *name) {
 	if (name == NULL) return;

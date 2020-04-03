@@ -238,6 +238,10 @@ void deinit_msg_win(msg_win *m);
 //Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
 void del_msg_win(msg_win *m);
 
+//If the strings you've saved in m are allocated with malloc, you can use
+//this helper function to free them all
+void free_msg_win_logs(msg_win *m);
+
 //Duplicates string in name (if non-NULL) and saves it into m. 
 void msg_win_set_name(msg_win *m, char *name);
 

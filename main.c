@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <poll.h>
 #include "queue.h"
 #include "textio.h"
 #include "dbg_guv.h"
@@ -51,162 +52,11 @@ void* producer(void *v) {
     return NULL;
 }
 
-void get_net_cleanup(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered get_net_cleanup\n");
-#endif
-    queue *q = (queue*)v;
-    
-    pthread_mutex_lock(&q->mutex);
-    q->num_producers--;
-    pthread_mutex_unlock(&q->mutex);
-    
-    pthread_cond_broadcast(&q->can_cons);
-}
-
-void get_net_addrinfo_cleanup(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered get_net_addrinfo_cleanup\n");
-#endif
-    struct addrinfo **res = (struct addrinfo **)v;
-    if (*res != NULL) freeaddrinfo(*res);
-}
-
-void get_net_socket_cleanup(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered get_net_socket_cleanup\n");
-#endif
-    int *p = (int*)v;
-    close(*p);
-}
-
-
-typedef struct {
-    char *node;
-    char *serv;
-    
-    int sfd;
-    pthread_t tx_thread;
-    
-    queue *ingress;
-    queue *egress;
-} get_net_args;
-
-void get_net_tx_cleanup(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered get_net_tx_cleanup\n");
-#endif
-    get_net_args *args = (get_net_args *)v;
-    
-    //Forcibly disconnect all producers and consumers of egress queue
-    pthread_mutex_lock(&args->egress->mutex);
-    args->egress->num_producers = -1;
-    args->egress->num_consumers = -1;
-    pthread_mutex_unlock(&args->egress->mutex);
-    
-    pthread_join(args->tx_thread, NULL);
-    
-#ifdef DEBUG_ON
-    fprintf(stderr, "net_tx joined\n");
-#endif
-}
-
-void* net_tx(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered net_tx\n");
-#endif
-    get_net_args *args = (get_net_args *)v;
-    queue *q = args->egress;
-    
-    char cmd[4];
-    while (dequeue_n(q, cmd, 4) == 0) {
-        int len = write(args->sfd, cmd, 4);
-        if (len <= 0) break;
-    }
-    
-    
-    pthread_exit(NULL);
-}
-
-void* get_net(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered net_mgr\n");
-#endif
-    get_net_args *args = (get_net_args *)v;
-    queue *q = args->ingress;
-    
-    char line[80];
-    int len;
-    
-    pthread_cleanup_push(get_net_cleanup, q);
-    
-    struct addrinfo *res;
-    struct addrinfo hint = {
-        .ai_family = AF_INET,
-        .ai_socktype = SOCK_STREAM,
-        .ai_protocol = 0 //Not sure if this protocol field needs to be set
-    };
-    
-    int rc = getaddrinfo(args->node, args->serv, &hint, &res);
-    if (rc < 0) {
-		cursor_pos(1, term_rows-1);
-        sprintf(line, "Could not resolve [%s]: %s" ERASE_TO_END "%n", args->node, gai_strerror(rc), &len);
-        write(STDOUT_FILENO, line, len);
-        goto err_close_tx_thread;
-    }
-    pthread_cleanup_push(get_net_addrinfo_cleanup, &res);
-    
-    int sfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sfd < 0) {
-		cursor_pos(1, term_rows-1);
-        sprintf(line, "Could not open socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
-        write(STDOUT_FILENO, line, len);
-        goto err_free_addrinfo;
-    }
-    
-    args->sfd = sfd;
-    
-    pthread_cleanup_push(get_net_socket_cleanup, &sfd);
-    
-    rc = connect(sfd, res->ai_addr, res->ai_addrlen);
-    if (rc < 0) {
-		cursor_pos(1, term_rows-1);
-        sprintf(line, "Could not connect socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
-        write(STDOUT_FILENO, line, len);
-        goto err_close_socket;
-    }
-    
-    //This is a pretty long-running thread, so free the memory ASAP
-    freeaddrinfo(res);
-    //Don't forget to mark as NULL so cleanup function can deal with it
-    res = NULL;
-    
-    //Spin up egress thread
-    pthread_create(&args->tx_thread, NULL, net_tx, args);
-    pthread_cleanup_push(get_net_tx_cleanup, args);
-    
-    char buf[64];
-    int len;
-    while ((len = read(sfd, buf, 64)) > 0) {
-        rc = queue_write(q, buf, len);
-        if (rc < 0) {
-            break;
-        }
-    }
-    
-    pthread_cleanup_pop(1);
-err_close_socket:
-    pthread_cleanup_pop(1);
-err_free_addrinfo:
-    pthread_cleanup_pop(1);
-err_close_tx_thread:
-    pthread_cleanup_pop(1);
-    return NULL;
-}
-
 fpga_connection_info *f = NULL;
-
 queue *net_egress = NULL;
+
+//This is the window that shows messages going by
+msg_win *err_log = NULL;
 
 void got_rl_line(char *str) {
     cursor_pos(1,2);
@@ -221,6 +71,11 @@ void got_rl_line(char *str) {
 		if (rc < 0) {
 			cursor_pos(1, term_rows-1);
 			sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
+			write(1, line, len);
+			return;
+		} else if (f == NULL) {
+			cursor_pos(1, term_rows-1);
+			sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", cmd.error_str, &len);
 			write(1, line, len);
 			return;
 		} else {
@@ -312,44 +167,16 @@ enum {
     READLINE
 };
 
-int mode = NORMAL;
-
-int main(int argc, char **argv) {    
-    atexit(clean_screen);
-    term_init();
-    
-    init_readline(got_rl_line);
-    
-    queue q = QUEUE_INITIALIZER;
-    q.num_producers++;
-    q.num_consumers++;    
-    
-    pthread_t prod;
-    
-    pthread_create(&prod, NULL, producer, &q);
-    
-    queue net_rx = QUEUE_INITIALIZER;
-    queue net_tx = QUEUE_INITIALIZER;
-    net_rx.num_producers++;
-    net_rx.num_consumers++;
-    net_tx.num_producers++;
-    net_tx.num_consumers++;
-    pthread_t net_mgr;
-    
-    net_egress = &net_tx;
-    
-    get_net_args args = {
-        .node = (argc > 1) ? argv[1] : "localhost",
-        .serv = (argc > 2) ? argv[2] : "5555",
-        .ingress = &net_rx,
-        .egress = &net_tx
-    };
-    
-    pthread_create(&net_mgr, NULL, get_net, &args);
-    
-    f = new_fpga_connection(NULL, NULL);
-    
-    msg_win *g = &f->logs[0];
+void callback(new_fpga_cb_info info) {
+	f = info.f;
+	if (f == NULL) {
+		char line[80];
+		sprintf(line, "Could not connect to FPGA: %s", info.error_str);
+		char *old = msg_win_append(err_log, strdup(line));
+		if (old != NULL) free(old);
+	}
+	
+	msg_win *g = &f->logs[0];
     g->x = 1;
     g->y = 7;
     g->w = 30;
@@ -364,7 +191,34 @@ int main(int argc, char **argv) {
     h->h = 7;
     h->visible = 1;
     msg_win_set_name(h, "FIZZBUZZ");
+}
+
+int main(int argc, char **argv) {    
+    atexit(clean_screen);
+    term_init();
+    
+    init_readline(got_rl_line);
+    
+    
+    //Set up thread that reads from keyboard/mouse. This will disappear soon
+    //once I set up the call to poll() in the main event loop
+    queue q = QUEUE_INITIALIZER;
+    q.num_producers++;
+    q.num_consumers++;    
+    
+    pthread_t prod;
+    pthread_create(&prod, NULL, producer, &q);
+    
+    new_fpga_connection(callback, "localhost", "5555", NULL);
         
+    err_log = new_msg_win("Message Window");
+    err_log->x = 1;
+    err_log->y = 14;
+    err_log->w = term_cols - 2;
+    err_log->h = 8;
+    err_log->visible = 1;
+    
+    //Buffer for constructing strings to write to stdout
     char line[1024];
     int len = 0;
     
@@ -377,24 +231,63 @@ int main(int argc, char **argv) {
     write(1, line, len);
     status_drawn = 1;
     
+	int mode = NORMAL;
+	//Main event loop
     while(1) {
         int rc;
         char c;
         unsigned msg[2];        
         
         //Get network data
-        while(nb_dequeue_n(&net_rx, (char*) msg, sizeof(msg)) == 0) {
-            unsigned addr = msg[0];
-            char *log_msg = malloc(32);
-            sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
-            
-            char *old = append_log(f, addr, log_msg);
-            if (addr == 0) g->need_redraw = 1;
-            else if (addr == 1) h->need_redraw = 1;
-            if (old != NULL) free(old);
-        }   
+        if (f != NULL) {
+			struct pollfd pfd = {
+				.fd = f->sfd,
+				.events = POLLIN | POLLHUP
+			};
+			#ifdef DEBUG_ON
+			fprintf(stderr, "Starting poll!\n");
+			fflush(stderr);
+			#endif
+			
+			rc = poll(&pfd, 1, 0);
+			
+			#ifdef DEBUG_ON
+			fprintf(stderr, "Poll finished!\n");
+			fflush(stderr);
+			#endif
+			
+			if (pfd.revents & POLLIN) {
+				int num_read;
+				unsigned msg[2];
+				
+				num_read = read(f->sfd, (char*) msg, sizeof(msg));
+				char *old;
+				if (num_read != sizeof(msg)) {
+					old = msg_win_append(err_log, strdup("Did not read enough from network. This code could be a lot smarter!"));
+					if (old != NULL) free(old);
+					break;
+				} else {
+					unsigned addr = msg[0];
+					char *log_msg = malloc(32);
+					sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
+				}
+				
+				old = append_log(f, addr, log_msg);
+				if (old != NULL) free(old);
+			}
+			
+			if (pfd.revents & POLLHUP) {
+				char *old = msg_win_append(err_log, strdup("Lost FPGA connection"));
+				if (old != NULL) free(old);
+				del_fpga_connection(f);
+				f = NULL;
+			}
+		}
         
-        len = draw_dbg_guv(&f->guvs[0], line);
+        //Resize message window appropriately
+        err_log->w = term_cols - 2;
+        //Draw the message window
+        len = draw_msg_win(err_log, line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -403,14 +296,27 @@ int main(int argc, char **argv) {
             }
         }
         
-        len = draw_dbg_guv(&f->guvs[1], line);
-        if (len > 0) {
-            write(1, line, len);
-            if (mode == READLINE) {
-                //Put cursor in the right place
-                place_readline_cursor();
-            }
-        }
+        if (f != NULL) {
+			//Draw dbg_guvs. This is just a test; later, the user can turn 
+			//windows on and off, and we'll need a smarter loop
+			len = draw_dbg_guv(&f->guvs[0], line);
+			if (len > 0) {
+				write(1, line, len);
+				if (mode == READLINE) {
+					//Put cursor in the right place
+					place_readline_cursor();
+				}
+			}
+			
+			len = draw_dbg_guv(&f->guvs[1], line);
+			if (len > 0) {
+				write(1, line, len);
+				if (mode == READLINE) {
+					//Put cursor in the right place
+					place_readline_cursor();
+				}
+			}
+		}
         
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
@@ -437,37 +343,27 @@ int main(int argc, char **argv) {
         
         //If user pressed CTRL-D we can quit
         if (c == '\x04') {
-#ifdef DEBUG_ON
+			#ifdef DEBUG_ON
             fprintf(stderr, "Caught ctrl-D\n");
-#endif
+			#endif
             pthread_mutex_lock(&q.mutex);
-            q.num_consumers--;
+            q.num_producers = -1;
+            q.num_consumers = -1;
             pthread_mutex_unlock(&q.mutex);
-            
-            pthread_mutex_lock(&net_tx.mutex);
-            net_tx.num_producers--;
-            pthread_mutex_unlock(&net_tx.mutex);
-            
-            pthread_mutex_lock(&net_rx.mutex);
-            net_rx.num_consumers--;
-            pthread_mutex_unlock(&net_rx.mutex);
             
             //This is just desperate...
             pthread_cond_broadcast(&q.can_prod);
             pthread_cond_broadcast(&q.can_cons);
-            pthread_cond_broadcast(&net_rx.can_prod);
-            pthread_cond_broadcast(&net_rx.can_cons);
-            pthread_cond_broadcast(&net_tx.can_prod);
-            pthread_cond_broadcast(&net_tx.can_cons);
             
             usleep(1000);
             
             //We gave peace a chance, but one of the threads may be blocked in
             //a read call. We have no choice but to cancel them; I should find
             //a way to fix this...
-            pthread_cancel(net_mgr);
             pthread_cancel(prod);
             
+            //Cross your fingers that this works!
+            del_fpga_connection(f);
             break;
         } else {
             if (mode == READLINE) {
@@ -540,6 +436,20 @@ int main(int argc, char **argv) {
                             h->need_redraw = 1;
                         }
                     }
+                    
+                    //Again: this is just for fun! This is not staying around permanently, I promise!
+                    if (in.btn == TEXTIO_WUP) {
+                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
+                            if (err_log->buf_offset < err_log->l.nlines - err_log->h - 1) err_log->buf_offset++;
+                            err_log->need_redraw = 1;
+                        }
+                    } else if (in.btn == TEXTIO_WDN) {
+                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
+                            if (err_log->buf_offset > 0) err_log->buf_offset--;
+                            err_log->need_redraw = 1;
+                        }
+                    }
+                    
                     sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 
                         in.shift ? "(shift)" : "", 
                         in.meta ? "(alt)" : "", 
@@ -565,6 +475,9 @@ int main(int argc, char **argv) {
         
         sched_yield();
     }
+    
+    free_msg_win_logs(err_log);
+    del_msg_win(err_log);
     
     pthread_join(net_mgr, NULL);
 #ifdef DEBUG_ON

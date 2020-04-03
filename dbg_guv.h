@@ -5,7 +5,7 @@
 #include "queue.h"
 #include "textio.h"
 
-//To fix circular definitions
+//To fix circular definition of dbg_guv and fpga_connection_info
 struct _fpga_connection_info;
 
 //This struct contains all the state associated with displaying dbg_guv
@@ -35,7 +35,6 @@ typedef struct _dbg_guv {
 } dbg_guv;
 
 #define MAX_GUVS_PER_FPGA 32
-#define LOG_IN_MEM_SZ 4096
 typedef struct _fpga_connection_info {
 	//Place to save logs
     msg_win logs[MAX_GUVS_PER_FPGA];
@@ -103,6 +102,10 @@ void dbg_guv_set_name(dbg_guv *d, char *name);
 //to improve this...
 int draw_dbg_guv(dbg_guv *g, char *buf);
 
+
+///////////////////////////////////////////////////////
+//Error strings, whose pointers double as error codes//
+///////////////////////////////////////////////////////
 extern char const *const DBG_GUV_SUCC; //= "success";
 extern char const *const DBG_GUV_NULL_ARG; //= "received NULL argument";
 extern char const *const DBG_GUV_NULL_CB; //= "received NULL callback";
