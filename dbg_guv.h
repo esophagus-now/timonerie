@@ -76,6 +76,14 @@ typedef struct _new_fpga_cb_info {
 
 typedef void new_fpga_cb(new_fpga_cb_info info);
 
+//An "iterator" to a dbg_guv or an fpga_connection_info. If f is NULL, this
+//iterator is considered invalid. If addr is -1, this iterator is considered
+//to be pointing to the fpga_connection_info. 
+typedef struct _dbg_guv_it {
+    fpga_connection_info *f;
+    int addr;
+} dbg_guv_it;
+
 //Idea: this function should take a callback as an argument. This callback
 //will be called from inside a new thread once the socket is connected (or
 //some kind of error occurs)
