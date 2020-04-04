@@ -57,7 +57,10 @@ void* producer(void *v) {
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
 
+fpga_connection_info *FIX_THIS = NULL;
+
 void got_rl_line(char *str) {
+    fpga_connection_info *f = FIX_THIS;
     cursor_pos(1,2);
     char line[80];
     int len;
@@ -175,6 +178,7 @@ void callback(new_fpga_cb_info info) {
         if (old != NULL) free(old);
         return;
     }
+    FIX_THIS = f;
     
     msg_win *g = &f->logs[0];
     g->x = 1;
@@ -219,7 +223,7 @@ int main(int argc, char **argv) {
     pthread_t prod;
     pthread_create(&prod, NULL, producer, &q);
     
-    pollfd_array *pfd_arr;
+    pollfd_array *pfd_arr = new_pollfd_array(16);
     new_fpga_connection(callback, "localhost", "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
@@ -244,6 +248,8 @@ int main(int argc, char **argv) {
     
     int mode = NORMAL;
     
+    fpga_connection_info *f = FIX_THIS;
+    
     //Main event loop
     while(1) {
         int rc;
@@ -262,7 +268,7 @@ int main(int argc, char **argv) {
         } else {
             //Traverse the active fds in pfd_arr
             struct pollfd *cur = NULL;
-            while (cur = pollfd_array_get_active(pfd_arr, cur)) {
+            while ((cur = pollfd_array_get_active(pfd_arr, cur)) != NULL) {
                 //Check if this connection was lost
                 if (cur->revents & POLLHUP) {
                     char *errmsg = malloc(80);
@@ -276,7 +282,7 @@ int main(int argc, char **argv) {
                 void **v = pollfd_array_get_user_data(pfd_arr, cur);
                 if (v == NULL) {
                     char *errmsg = malloc(80);
-                    sprintf(errmsg, "Could not issue poll system call: %s", p->error_str);
+                    sprintf(errmsg, "Could not issue poll system call: %s", pfd_arr->error_str);
                     char *old = msg_win_append(err_log, errmsg);
                     if (old != NULL) free(old);
                     continue;
@@ -319,7 +325,7 @@ int main(int argc, char **argv) {
                 //Now the really ugly thing: take whatever partial message
                 //is left and shift it to the beginning of the buffer
                 int i;
-                int leftover_bytes = buf_pos % 8;
+                int leftover_bytes = f->buf_pos % 8;
                 f->buf_pos -= leftover_bytes;
                 for (i = 0; i < leftover_bytes; i++) {
                     f->buf[i] = f->buf[f->buf_pos++];
@@ -330,7 +336,7 @@ int main(int argc, char **argv) {
             //Make sure no errors occurred while we traversed the active fds
             if (pfd_arr->error_str != PFD_ARR_SUCC) {
                     char *errmsg = malloc(80);
-                    sprintf(errmsg, "pollfd_array_get_active_error: %s", p->error_str);
+                    sprintf(errmsg, "pollfd_array_get_active_error: %s", pfd_arr->error_str);
                     char *old = msg_win_append(err_log, errmsg);
                     if (old != NULL) free(old);
             }
