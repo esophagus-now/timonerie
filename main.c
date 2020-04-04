@@ -54,6 +54,10 @@ void* producer(void *v) {
 }
 
 
+#ifdef DEBUG_ON
+int num_poll_logs = 1000;
+#endif
+    
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
 
@@ -87,6 +91,9 @@ void got_rl_line(char *str) {
                     cmd.dbg_guv_addr,
                     &len
                 );
+                #ifdef DEBUG_ON
+                num_poll_logs = 0;
+                #endif
             } else {
                 sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
                     cmd.param, 
@@ -170,6 +177,10 @@ enum {
 };
 
 void callback(new_fpga_cb_info info) {
+    #ifdef DEBUG_ON
+    fprintf(stderr, "Callback called! f = %p\n", info.f);
+    fflush(stderr);
+    #endif
     fpga_connection_info *f = info.f;
     if (f == NULL) {
         char line[80];
@@ -248,8 +259,6 @@ int main(int argc, char **argv) {
     
     int mode = NORMAL;
     
-    fpga_connection_info *f = FIX_THIS;
-    
     //Main event loop
     while(1) {
         int rc;
@@ -258,6 +267,14 @@ int main(int argc, char **argv) {
         //Get network data
         //Are any fds available for reading right now?
         rc = poll(pfd_arr->pfds, pfd_arr->num, 0);
+        
+        #ifdef DEBUG_ON
+        if (num_poll_logs < 100) {
+            fprintf(stderr, "poll returned %d\n", rc);
+            fflush(stderr);
+            num_poll_logs++;
+        }
+        #endif
         
         if (rc < 0) {
             int saved_errno = errno;
@@ -304,13 +321,24 @@ int main(int argc, char **argv) {
                 
                 //Iterate through all the complete messages in the read buffer
                 f->buf_pos += num_read;
+                
+                #ifdef DEBUG_ON
+                fprintf(stderr, "Wrote %d new bytes into (%p)->buf", num_read, f);
+                fflush(stderr);
+                #endif
+                
                 unsigned *rd_pos = (unsigned *)f->buf;
                 int msgs_left = (f->buf_pos / 8);
                 while (msgs_left --> 0) {
                     unsigned addr = *rd_pos++;
-                    addr &= 0b1111; //TODO: make this a runtime parameter
                     unsigned val = *rd_pos++;
                     
+                    #ifdef DEBUG_ON
+                    fprintf(stderr, "Read msg, addr = 0x%08x, val = 0x%08x (%u)", addr, val, val);
+                    fflush(stderr);
+                    #endif
+                    
+                    addr &= 0b11111; //TODO: make this a runtime parameter
                     if (addr >= MAX_GUVS_PER_FPGA) {
                         //ignore this message
                         continue;
@@ -354,10 +382,10 @@ int main(int argc, char **argv) {
             }
         }
         
-        if (f != NULL) {
+        if (FIX_THIS != NULL) {
             //Draw dbg_guvs. This is just a test; later, the user can turn 
             //windows on and off, and we'll need a smarter loop
-            len = draw_dbg_guv(&f->guvs[0], line);
+            len = draw_dbg_guv(&FIX_THIS->guvs[0], line);
             if (len > 0) {
                 write(1, line, len);
                 if (mode == READLINE) {
@@ -366,7 +394,7 @@ int main(int argc, char **argv) {
                 }
             }
             
-            len = draw_dbg_guv(&f->guvs[1], line);
+            len = draw_dbg_guv(&FIX_THIS->guvs[1], line);
             if (len > 0) {
                 write(1, line, len);
                 if (mode == READLINE) {
@@ -421,8 +449,8 @@ int main(int argc, char **argv) {
             pthread_cancel(prod);
             
             //Cross your fingers that this works!
-            del_fpga_connection(f);
-            f = NULL;
+            del_fpga_connection(FIX_THIS);
+            FIX_THIS = NULL;
             break;
         } else {
             if (mode == READLINE) {
@@ -471,9 +499,9 @@ int main(int argc, char **argv) {
                     sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                     break;
                 case TEXTIO_GETCH_MOUSE: {
-                    if (f != NULL) {
-                        msg_win *g = &f->logs[0];
-                        msg_win *h = &f->logs[1];
+                    if (FIX_THIS != NULL) {
+                        msg_win *g = &FIX_THIS->logs[0];
+                        msg_win *h = &FIX_THIS->logs[1];
                         //Just for fun: use scrollwheel inside dbg_guv
                         if (in.btn == TEXTIO_WUP) {
                             if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
@@ -547,7 +575,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Joined prod\n");
 #endif
     
-    del_fpga_connection(f);
+    del_fpga_connection(FIX_THIS);
     clean_screen();
     return 0;
 }
