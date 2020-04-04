@@ -35,6 +35,7 @@ typedef struct _dbg_guv {
 } dbg_guv;
 
 #define MAX_GUVS_PER_FPGA 32
+#define FCI_BUF_SIZE 512
 typedef struct _fpga_connection_info {
     //Place to save logs
     msg_win logs[MAX_GUVS_PER_FPGA];
@@ -48,7 +49,11 @@ typedef struct _fpga_connection_info {
     int addr_len;
     int sfd;
     int sfd_state;
-     
+    
+    //General-purpose buffer, but I only use it for network ingress data
+    char buf[FCI_BUF_SIZE];
+    int buf_pos;
+    
     //Other threads can enqueue dbg_guv command messages on egress queue
     queue egress;
     //This is the thread ID for the thread that empties egress and sends 

@@ -18,6 +18,7 @@
 #include "textio.h"
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
+#include "pollfd_array.h"
 
 void producer_cleanup(void *v) {
 #ifdef DEBUG_ON
@@ -52,7 +53,6 @@ void* producer(void *v) {
     return NULL;
 }
 
-fpga_connection_info *f = NULL;
 
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
@@ -167,7 +167,7 @@ enum {
 };
 
 void callback(new_fpga_cb_info info) {
-    f = info.f;
+    fpga_connection_info *f = info.f;
     if (f == NULL) {
         char line[80];
         sprintf(line, "Could not connect to FPGA: %s", info.error_str);
@@ -191,6 +191,16 @@ void callback(new_fpga_cb_info info) {
     h->h = 7;
     h->visible = 1;
     msg_win_set_name(h, "FIZZBUZZ");
+    
+    pollfd_array *p = (pollfd_array *)info.user_data;
+    int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
+    if (rc < 0) {
+        char line[80];
+        sprintf(line, "Could not add new connection to pollfd array: %s", p->error_str);
+        char *old = msg_win_append(err_log, strdup(line));
+        if (old != NULL) free(old);
+        return;
+    }
 }
 
 int main(int argc, char **argv) {    
@@ -209,7 +219,8 @@ int main(int argc, char **argv) {
     pthread_t prod;
     pthread_create(&prod, NULL, producer, &q);
     
-    new_fpga_connection(callback, "localhost", "5555", NULL);
+    pollfd_array *pfd_arr;
+    new_fpga_connection(callback, "localhost", "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
     err_log->x = 1;
@@ -232,43 +243,96 @@ int main(int argc, char **argv) {
     status_drawn = 1;
     
     int mode = NORMAL;
+    
     //Main event loop
     while(1) {
         int rc;
         char c;     
         
         //Get network data
-        if (f != NULL) {
-            struct pollfd pfd = {
-                .fd = f->sfd,
-                .events = POLLIN | POLLHUP
-            };
-            
-            rc = poll(&pfd, 1, 0);
-            
-            if (pfd.revents & POLLIN) {
-                int num_read;
-                unsigned msg[2];
-                
-                num_read = read(f->sfd, (char*) msg, sizeof(msg));
-                char *old;
-                if (num_read != sizeof(msg)) {
-                    old = msg_win_append(err_log, strdup("Did not read enough from network. This code could be a lot smarter!"));
+        //Are any fds available for reading right now?
+        rc = poll(pfd_arr->pfds, pfd_arr->num, 0);
+        
+        if (rc < 0) {
+            int saved_errno = errno;
+            char *errmsg = malloc(80);
+            sprintf(errmsg, "Could not issue poll system call: %s", strerror(saved_errno));
+            char *old = msg_win_append(err_log, errmsg);
+            if (old != NULL) free(old);
+        } else {
+            //Traverse the active fds in pfd_arr
+            struct pollfd *cur = NULL;
+            while (cur = pollfd_array_get_active(pfd_arr, cur)) {
+                //Check if this connection was lost
+                if (cur->revents & POLLHUP) {
+                    char *errmsg = malloc(80);
+                    sprintf(errmsg, "A socket was unexpectedly closed");
+                    char *old = msg_win_append(err_log, errmsg);
                     if (old != NULL) free(old);
-                } else {
-                    unsigned addr = msg[0];
-                    char *log_msg = malloc(32);
-                    sprintf(log_msg, "0x%08x (%u)", msg[1], msg[1]);
-                    old = append_log(f, addr, log_msg);
-                    if (old != NULL) free(old);
+                    continue;
                 }
+                
+                //Get the fpga_connection_info associated with this fd
+                void **v = pollfd_array_get_user_data(pfd_arr, cur);
+                if (v == NULL) {
+                    char *errmsg = malloc(80);
+                    sprintf(errmsg, "Could not issue poll system call: %s", p->error_str);
+                    char *old = msg_win_append(err_log, errmsg);
+                    if (old != NULL) free(old);
+                    continue;
+                }
+                fpga_connection_info *f = (fpga_connection_info*)*v;
+                
+                //Try reading as many bytes as we have space for. Note: this
+                //is kind of ugly, but because we might only read part of a 
+                //message, we need to save partial messages in a buffer
+                int num_read = read(cur->fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
+                if (num_read < 0) {
+                    int saved_errno = errno;
+                    char *errmsg = malloc(80);
+                    sprintf(errmsg, "Could not read from network: %s", strerror(saved_errno));
+                    char *old = msg_win_append(err_log, errmsg);
+                    if (old != NULL) free(old);
+                    continue;
+                }
+                
+                //Iterate through all the complete messages in the read buffer
+                f->buf_pos += num_read;
+                unsigned *rd_pos = (unsigned *)f->buf;
+                int msgs_left = (f->buf_pos / 8);
+                while (msgs_left --> 0) {
+                    unsigned addr = *rd_pos++;
+                    addr &= 0b1111; //TODO: make this a runtime parameter
+                    unsigned val = *rd_pos++;
+                    
+                    if (addr >= MAX_GUVS_PER_FPGA) {
+                        //ignore this message
+                        continue;
+                    }
+                    
+                    char *log = malloc(32);
+                    sprintf(log, "0x%08x (%u)", val, val);
+                    char *old = append_log(f, addr, log);
+                    if (old != NULL) free(NULL);
+                }
+                
+                //Now the really ugly thing: take whatever partial message
+                //is left and shift it to the beginning of the buffer
+                int i;
+                int leftover_bytes = buf_pos % 8;
+                f->buf_pos -= leftover_bytes;
+                for (i = 0; i < leftover_bytes; i++) {
+                    f->buf[i] = f->buf[f->buf_pos++];
+                }
+                f->buf_pos = i;
+                //Cross your fingers!!!!!!!!!!!!!!!!!!
             }
-            
-            if (pfd.revents & POLLHUP) {
-                char *old = msg_win_append(err_log, strdup("Lost FPGA connection"));
-                if (old != NULL) free(old);
-                del_fpga_connection(f);
-                f = NULL;
+            //Make sure no errors occurred while we traversed the active fds
+            if (pfd_arr->error_str != PFD_ARR_SUCC) {
+                    char *errmsg = malloc(80);
+                    sprintf(errmsg, "pollfd_array_get_active_error: %s", p->error_str);
+                    char *old = msg_win_append(err_log, errmsg);
+                    if (old != NULL) free(old);
             }
         }
         

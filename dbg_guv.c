@@ -65,8 +65,6 @@ static void* fpga_egress_thread(void *arg) {
 //A helper function to properly allocate, construct, and initialize an 
 //fpga_connection_info struct.
 static fpga_connection_info *construct_fpga_connection() {
-    //TODO: sanity check inputs
-    
     fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
     if (!ret) return NULL;
     
@@ -90,6 +88,8 @@ static fpga_connection_info *construct_fpga_connection() {
         ret->guvs[i].parent = ret;
         ret->guvs[i].addr = i;
     }
+    
+    ret->buf_pos = 0;
     
     init_queue(&ret->egress, 1, 1);
     
