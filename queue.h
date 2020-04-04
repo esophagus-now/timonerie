@@ -13,8 +13,8 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t can_prod;
     pthread_cond_t can_cons;
-    int num_producers;
-    int num_consumers;
+    volatile int num_producers;
+    volatile int num_consumers;
 } queue;
 
 #define PTR_QUEUE_OCCUPANCY(q) ((q)->full ? BUF_SIZE : ((BUF_SIZE + (q)->wr_pos - (q)->rd_pos) % BUF_SIZE))
@@ -31,6 +31,12 @@ typedef struct {
     .num_producers = 0,\
     .num_consumers = 0\
 }
+
+//Initializes a statically allocated queue. Return -1 on error
+void init_queue(queue *q, int num_producers, int num_consumers);
+
+//Frees resources allocated by init_queue. Gracefully ignores NULL input
+void deinit_queue(queue *q);
 
 //Adds a char to queue q in a thread-safe way. Returns 0 on successful write,
 //negative on error. This function can sleep; do not call while holding _any_

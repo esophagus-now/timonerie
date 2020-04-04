@@ -205,10 +205,10 @@ void del_linebuf(linebuf *l);
 char *linebuf_append(linebuf *l, char *log);
 
 typedef struct _msg_win {
-	//Stores lines in the message window
-	linebuf l;
-	
-	//Display information
+    //Stores lines in the message window
+    linebuf l;
+    
+    //Display information
     char name[32];
     int x, y; 
     int w, h; //Minimum: 6 by 6?
@@ -238,13 +238,17 @@ void deinit_msg_win(msg_win *m);
 //Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
 void del_msg_win(msg_win *m);
 
+//If the strings you've saved in m are allocated with malloc, you can use
+//this helper function to free them all
+void free_msg_win_logs(msg_win *m);
+
 //Duplicates string in name (if non-NULL) and saves it into m. 
 void msg_win_set_name(msg_win *m, char *name);
 
-//Macro that calls linebuf_append(&m->l, log). No strings are ever copied 
-//or freed. This will also return any old logs that were "dislodged" by the
-//new one
-#define msg_win_append(m_ptr, log) linebuf_append(&m_ptr->l, log)
+//Calls linebuf_append(&m->l, log). No strings are ever copied or freed. 
+//This will also return any old logs that were "dislodged" by the new one.
+//Finally, a redraw is triggered,
+char* msg_win_append(msg_win *m, char *log);
 
 //Returns number of bytes added into buf. Not really safe, should probably try
 //to improve this... returns -1 on error.
