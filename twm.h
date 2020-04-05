@@ -37,16 +37,11 @@ typedef int draw_sz_t(void *item, int w, int h);
 //area of the screen
 typedef void trigger_redraw_t(void *item);
 
-//If a drawable does not want to implement this, they can leave the pointer
-//as NULL inside draw_operations
-typedef void set_error_str_t(void *item, char const *str);
-
 //All drawable items must implement this interface
 typedef struct _draw_operations {
     draw_fn_t *draw_fn;
     draw_sz_t *draw_sz;
     trigger_redraw_t *trigger_redraw;
-    set_error_str_t *set_error_str; //TODO: probably remove, but make sure
 } draw_operations;
 
 typedef enum _twm_node_type {
@@ -446,6 +441,7 @@ static twm_node* construct_leaf_twm_node(void *item, draw_operations draw_ops) {
     ret->type = TWM_LEAF;
     ret->item = item;
     ret->draw_ops = draw_ops;
+    ret->num_children = 1; //Maybe this will come in handy?
     
     ret->error_str = TWM_SUCC;
     return ret;
@@ -523,11 +519,14 @@ static int redraw_twm_node_tree(twm_node *t) {
                 t->error_str = cur->error_str;
                 return -1;
             }
-            
-            //Success
-            t->error_str = TWM_SUCC;
-            return 0;
         }
+            
+        //Also, redraw ourselves
+        t->need_redraw = 1;
+        
+        //Success
+        t->error_str = TWM_SUCC;
+        return 0;
     }
     
     t->error_str = TWM_IMPOSSIBLE;
@@ -538,6 +537,7 @@ static int redraw_twm_node_tree(twm_node *t) {
 twm_tree* new_twm_tree() {
     twm_tree *ret = calloc(1, sizeof(twm_tree));
     
+    //The head and focus pointers are already set to NULL
     ret->error_str = TWM_SUCC;
     return ret;
 }
@@ -549,13 +549,6 @@ void del_twm_tree(twm_tree *t) {
     free_twm_node_tree(t->head);
     
     free(t);
-}
-
-//Inserts a new drawable, based on t's currently focused window. Returns 0
-//on success, or -1 on error (and sets t->error_str). Returns -2 if t was
-//NULL
-int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
-    
 }
 
 //Directions for moving focus/windows
@@ -779,8 +772,8 @@ int twm_tree_move_focus(twm_tree *t, twm_dir dir) {
 }
 
 //Follows usual error-return technique. Also makes sure to set redraws
-//where necessary
-static int remove_node(twm_tree *t, twm_node *src) {
+//where necessary. DOES NOT FREE MEMORY HELD BY SRC!
+static int twm_remove_node(twm_tree *t, twm_node *src) {
     //Sanity check inputs
     if (t == NULL) {
         return -2; //This is all we can do
@@ -812,19 +805,19 @@ static int remove_node(twm_tree *t, twm_node *src) {
         t->head = NULL;
         t->focus = NULL;
         
-        destroy_twm_node(src);
-        
         #ifdef DEBUG_ON
         fprintf(stderr, "remove_node postcondition: 0x%x\n", check_tree_invariants(t->head));
         fflush(stderr);
         #endif
         
+        //src is not freed!!!
+        
         t->error_str = TWM_SUCC;
         return 0;
     }
     
-    //Now the ugly case. First find the index of this node inside its parent's
-    //list of children
+    //Now the general case. First find the index of this node inside its 
+    //parent's list of children
     int ind = twm_node_indexof(src, parent);
     if (ind < 0) {
         //Propagate error
@@ -861,14 +854,21 @@ static int remove_node(twm_tree *t, twm_node *src) {
     fflush(stderr);
     #endif
     
+    //src is not freed!!!
+    
     t->error_str = TWM_SUCC;
     return 0;
 }
 
-//Inserts tje twm_node (specified as the node pointed to by src) into the
-//location (specified as the dst_ind'th child of dst). Follows usual error
+//Inserts the twm_node (specified as the node pointed to by src) into the
+//location specified as the dst_ind'th child of dst. Follows usual error
 //return method
-static int insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
+//UGLY CORNER CASE: Normally, before calling this function, you will figure
+//out a stacked node and index where you want this new node to go. However,
+//if there is only one node in the tree, then it doesn't have a parent. This
+//function will handle that case if the dst argument points to a LEAF node.
+//In that case, dst_ind is ignored.
+static int twm_insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
     //Sanity check inputs
     if (t == NULL) {
         return -2;
@@ -882,15 +882,62 @@ static int insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
         return -1;
     }
     
-    //Special case: if there is only one node in the tree, then it is a leaf
+    //Corner case: if there is only one node in the tree, then it is a leaf
     //and we need to convert it to a stacked node
+    if (dst->type == TWM_LEAF) {
+        //This can only happen if this node is at the head of the tree. 
+        //Double check this and then do the necessary changes
+        if (t->head != dst) {
+            t->error_str = TWM_INVALID_TREE;
+            return -1;
+        }
+        
+        //Take this node and make it a TWM_LEAF child of a TWM_HORZ node
+        twm_node *to_add = construct_leaf_twm_node(dst->item, dst->draw_ops);
+        if (to_add == NULL) {
+            t->error_str = TWM_OOM;
+            return -1;
+        }
+        
+        dst->type = TWM_HORZ;
+        dst->num_children = 1;
+        dst->children[0] = to_add;
+        
+        dst_ind = 1;
+    }
     
+    //Now we can write the general function
+    if (dst->num_children == MAX_CHILDREN) {
+        t->error_str = TWM_FULL_PARENT;
+        return -1;
+    }
+    
+    dst->num_children++;
+    //Shift down all the nodes that go after the inserted one
+    int i;
+    for (i = dst->num_children - 1; i > dst_ind; i--) {
+        dst->children[i] = dst->children[i - 1];
+    }
+    //Put the new node in the right place
+    dst->children[dst_ind] = src;
+    
+    //Make sure to trigger a redraw
+    int rc = redraw_twm_node_tree(dst);
+    if (rc < 0) {
+        //Propagate error
+        t->error_str = dst->error_str;
+        return -1;
+    }
+    
+    //Success
+    t->error_str = TWM_SUCC;
+    return 0;
 }
 
 //Moves a twm_node (specified as the node pointed to by src) to another
 //location (specified as the dst_ind'th child of dst). Follows usual error
 //return method
-static int move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
+static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
     //Sanity check inputs
     if (t == NULL) {
         return -2; //This is all we can do
@@ -914,60 +961,48 @@ static int move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind) {
         return -1;
     }
     
-    //First, begin by deleting src->children[src_ind] from the tree. As we
-    //do that, we have to be careful to update dst and dst_ind if their 
-    //part of the tree is modified by the deletion
+    //TODO: special case when src->parent = dest
     
-    //Special case: src == dst. We have a clean and easy solution: simply 
-    //rotate the list between the two indices. By the way, trigger a redraw
-    //of all rotated children
-    if (src == dst) {
-        if (src_ind < dst_ind) {
-            twm_node *tmp = src->children[src_ind];
-            int i;
-            for (i = src_ind; i < dst_ind; i++) {
-                src->children[i] = src->children[i + 1];
-                redraw_twm_node_tree(src->children[i]);
-            }
-            src->children[dst_ind] = tmp;
-            redraw_twm_node_tree(tmp);
-        } else {
-            twm_node *tmp = src->children[src_ind];
-            int i;
-            for (i = src; i > dst_ind; i--) {
-                src->children[i] = src->children[i - 1];
-                redraw_twm_node_tree(src->children[i]);
-            }
-            src->children[dst_ind] = tmp;
-            redraw_twm_node_tree(tmp);
-        }
-        
-        #ifdef DEBUG_ON
-        fprintf(stderr, "move_node postcondition: 0x%x\n", check_tree_invariants(t->head));
-        fflush(stderr);
-        #endif
-        
-        t->error_str = TWM_SUCC;
-        return 0;
+    //First, begin by deleting src->children[src_ind] from the tree. So
+    //long as the invariant that no node has fewer than two children holds,
+    //one can prove that dst and dst_ind will remain valid
+    int rc = twm_remove_node(t, src);
+    if (rc < 0) {
+        return -1; //t->error_str is already set
     }
     
-    //Now deal with the ugly case
-    
-    //First, because of the tree invariant that no node has fewer than two
-    //children, one can prove that is is safe to insert this node at the
-    //right place before deleting it in its old place.
-    
-
+    //Now palce the node where we want it to go
+    rc = twm_insert_node(t, src, dst, dst_ind);
+    if (rc < 0) {
+        return -1; //t->error_str is already set
+    }
     
     #ifdef DEBUG_ON
     fprintf(stderr, "move_node postcondition: 0x%x\n", check_tree_invariants(t->head));
     fflush(stderr);
     #endif
+    
+    //Success
+    t->error_str = TWM_SUCC;
+    return 0;
+}
+
+//Inserts a new drawable, based on t's currently focused window. Returns 0
+//on success, or -1 on error (and sets t->error_str). Returns -2 if t was
+//NULL
+int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
+    //TODO
+}
+
+//TODO: comment
+int twm_tree_remove_focused(twm_tree *t) {
+    //TODO
 }
 
 //Returns 0 on success, -1 on error (and sets t->error_str). Returns -2 if
 //t is NULL.
 int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
+    //Sanity check inputs
     if (t == NULL) {
         return -2; //This is all we can do
     }
@@ -995,8 +1030,9 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
     twm_node *cur = t->focus->parent;
     twm_node *prev = t->focus;
     
-    int list_dir = (dir == UP || dir == LEFT) ? -1 : 1;
-    int jumped_hierarchy = 0;
+    //This is a bit hacky. Since we're inserting a new node, all the later
+    //nodes will shift down, so ewe use 0 in place of -1 for the direction
+    int list_dir = (dir == UP || dir == LEFT) ? 0 : 1;
     
     while (cur != NULL) {
         //If we are going TWM_UP or TWM_DOWN, and cur is a TWM_HORZ node,
@@ -1005,10 +1041,9 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
         if (((dir == TWM_UP || dir == TWM_DOWN) && cur->type == TWM_HORZ) ||
             ((dir == TWM_LEFT || dir == TWM_RIGHT) && cur->type == TWM_VERT)) 
         {
-            //Keep going up the heirarchy
+            //Keep going up the hierarchy
             prev = cur;
             cur = cur->parent;
-            jumped_hierarchy = 1;
             continue;
         }
 
@@ -1024,10 +1059,9 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
         
         //If we are already at the end, we need to go up the hierarchy
         if (ind + list_dir < 0 || ind + list_dir >= cur->num_children) {
-            //Keep going up the heirarchy
+            //Keep going up the hierarchy
             prev = cur;
             cur = cur->parent;
-            jumped_hierarchy = 1;
             continue;
         }
         
@@ -1035,12 +1069,7 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
         //t->focus to cur->chlidren[ind + list_dir], taking care to set 
         //focus, redraw, delete nodes, etc.
         
-        //In general, the technique would be to delete the node at t->focus
-        //and re-insert it at the right place. However, modifying the tree
-        //can invalidate cur and ind. Ugly...
-        //TODO
-        //Also, make sure to treat case where we move the node down the
-        //hierarchy of the node it is next to
+        int rc = twm_move_node(t, t->focus, cur, ind + list_dir
         
         t->error_str = TWM_SUCC;
         return 0;
