@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
     err_log->visible = 1;
     
     //Buffer for constructing strings to write to stdout
-    char line[1024];
+    char line[2048];
     int len = 0;
     
     textio_input in;

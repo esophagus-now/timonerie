@@ -60,10 +60,12 @@ typedef struct _dbg_cmd_ctx {
     char const *error_str;
 } dbg_cmd_ctx;
 
+typedef int parse_fn(dbg_cmd *dest, char const *str);
+
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
 //(unless dest is NULL, of course). Otherwise returns 0.
-int parse_dbg_cmd(dbg_cmd *dest, char *str);
+int parse_dbg_cmd(dbg_cmd *dest, char const *str);
 
 
 //////////////////////////////////////////////////

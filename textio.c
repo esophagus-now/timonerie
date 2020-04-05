@@ -50,6 +50,7 @@ char const *const TEXTIO_BAD_MODIFIER_CODE = "bad modifier code";
 char const *const TEXTIO_INVALID_PARAM = "invalid parameter";
 char const *const TEXTIO_OOM = "out of memory";
 char const *const TEXTIO_MSG_WIN_TOO_SMALL = "message window too small";
+char const *const TEXTIO_OOB = "out of bounds";
 
 void cursor_pos(int x, int y) {
     char line[80];
@@ -853,6 +854,57 @@ char *linebuf_append(linebuf *l, char *log) {
     return ret;
 }
 
+//Gathers the last h strings form l (starting from offset) and draws them 
+//into the rect defined by x,y,w,h. Returns number of bytes added into buf. 
+//Guaranteed to add less than (10+w)*h bytes into buf, so make sure you 
+//have at least that much space. Returns number of bytes added into buf, or
+//-1 on error (and sets l->error_str if possible). NOTE: returns -2 if l is
+//NULL
+int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf) {
+    //Sanity check inputs
+    if (l == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    if (w == 0 || h == 0) return 0; //Nothing to draw
+    if (x >= term_cols || y >= term_rows) return 0; //Nothing to draw
+    
+    if (offset + w >= l->nlines) {
+        l->error_str = TEXTIO_OOB;
+        return -1;
+    }
+    
+    if (x < 0 || y < 0 || w < 0 || h < 0) {
+        l->error_str = TEXTIO_INVALID_PARAM;
+        return -1;
+    }
+    
+    //Save initial buf poitner so we can calculate total change
+    char *buf_saved = buf;
+    
+    //Clip drawing rect to stay on the screen
+    if (x + w >= term_cols) w = term_cols - x;
+    if (y + h >= term_rows) h = term_rows - y;
+    
+    int i;
+    for (i = 0; i < h; i++) {
+        //Move the cursor
+        int incr = cursor_pos_cmd(buf, x, y + i);
+        buf += incr;
+        
+        //Compute index into line buffer's scrollback 
+        int ind = (l->pos-1) - offset - (h-1) + i;
+        //wrap into the right range (it's a circular buffer)
+        ind = (ind + l->nlines) % l->nlines;
+        
+        //Construct the string that we will print
+        sprintf(buf, "%-*.*s%n", w, w, l->lines[ind], &incr);
+        buf += incr;  
+    }
+    
+    return buf - buf_saved;
+}
+
 #define SCROLLBACK 1000
 
 //Statically initialize a msg_win. If name is not NULL, this name is copied
@@ -997,7 +1049,7 @@ int draw_msg_win(msg_win *m, char *buf) {
     int i;
     for (i = len; i < m->w - 1; i++) *buf++ = '-';
     *buf++ = '+';
-    
+    /*
     //Draw logs and box edges
     for (i = m->h-2-1; i >= 0; i--) {
         //Move the cursor
@@ -1013,6 +1065,42 @@ int draw_msg_win(msg_win *m, char *buf) {
         sprintf(buf, "|%-*.*s|%n", m->w-2, m->w-2, m->l.lines[ind], &incr);
         buf += incr;        
     }    
+    */
+    
+    incr = draw_linebuf(&m->l, m->buf_offset, m->x + 1, m->y + 1, m->w - 2, m->h - 2, buf);
+    if (incr < 0) {
+        //Propagate error code up
+        m->error_str = m->l.error_str;
+        return -1;
+    }
+    buf += incr;
+    
+    //Tricky business: draw vertical lines for border
+    incr = cursor_pos_cmd(buf, m->x, m->y+1);
+    buf += incr;
+    *buf++ = '|';
+    for (i = 1; i < m->h-2; i++) {
+        *buf++ = '\e';
+        *buf++ = '[';
+        *buf++ = 'B'; //Special CSI sequence to move cursor down
+        *buf++ = '\e';
+        *buf++ = '[';
+        *buf++ = 'D'; //Special CSI sequence to move cursor left
+        *buf++ = '|';
+    }
+    
+    incr = cursor_pos_cmd(buf, m->x + m->w-1, m->y+1);
+    buf += incr;
+    *buf++ = '|';
+    for (i = 1; i < m->h-2; i++) {
+        *buf++ = '\e';
+        *buf++ = '[';
+        *buf++ = 'B'; //Special CSI sequence to move cursor down
+        *buf++ = '\e';
+        *buf++ = '[';
+        *buf++ = 'D'; //Special CSI sequence to move cursor left
+        *buf++ = '|';
+    }
     
     //Draw bottom row
     //Move to bottom-left

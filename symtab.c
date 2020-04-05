@@ -91,7 +91,7 @@ int symtab_append(symtab *s, char *sym, void *dat, int dat_len) {
         return -1; //make_space_for_one_more already set error_str
     }
     
-    symtab_entry *ent = s->entries + s->num++;
+    symtab_entry *ent = s->entries + s->nents++;
     strncpy(ent->sym, sym, MAX_SYM_SIZE);
     ent->sym[MAX_SYM_SIZE - 1] = '\0'; //For extra safety
     memcpy(ent->dat, dat, dat_len);
@@ -129,7 +129,7 @@ int symtab_append_nodup(symtab *s, char *sym, void *dat, int dat_len) {
     
     //First, check if this sym is already in the table
     int i;
-    for (i = 0; i < s->num; i++) {
+    for (i = 0; i < s->nents; i++) {
         if (strcmp(s->entries[i].sym, sym) == 0) {
             memcpy(s->entries[i].dat, dat, dat_len);
             s->entries[i].dat_len = dat_len;
@@ -138,7 +138,7 @@ int symtab_append_nodup(symtab *s, char *sym, void *dat, int dat_len) {
     }
     
     //If we got here, it's because sym is not in the list
-    int rc = symtab_array_append(s, sym, dat, dat_len);
+    int rc = symtab_append(s, sym, dat, dat_len);
     if (rc < 0) {
         return -1; //symtab_array_append already set error_str
     }
@@ -150,19 +150,19 @@ int symtab_append_nodup(symtab *s, char *sym, void *dat, int dat_len) {
 //element in the array, then decreasing the array's size. Returns 0 on 
 //success, -1 on error (and sets s->error_str appropriately). NOTE: returns
 //-2 if s was NULL
-int symtab_remove_at_index(pollfd_array *p, int ind) {
+int symtab_remove_at_index(symtab *s, int ind) {
     //Sanity check inputs
     if (s == NULL) {
         return -2; //This is all we can do
     }
-    if (ind < 0 || ind >= s->num) {
+    if (ind < 0 || ind >= s->nents) {
         s->error_str = SYMTAB_OOB;
         return -1;
     }
     
     //Perform the deletion
-    s->num--;
-    s->entries[ind] =  s->entries[p->num]; //More expensive than necessary,
+    s->nents--;
+    s->entries[ind] =  s->entries[s->nents]; //More expensive than necessary,
     //but who cares?
     
     s->error_str = SYMTAB_SUCC;
@@ -185,7 +185,7 @@ int symtab_array_remove(symtab *s, symtab_entry *ent) {
     
     //Get index of given pollfd struct
     int ind = ent - s->entries; //Remember C's rules abot pointer arithmetic
-    if (ind < 0 || ind >= s->num) {
+    if (ind < 0 || ind >= s->nents) {
         s->error_str = SYMTAB_NOT_MEMB;
         return -1;
     }
@@ -209,7 +209,7 @@ symtab_entry* symtab_lookup(symtab *s, char *sym) {
     }
     
     int i;
-    for (i = 0; i < s->num; i++) {
+    for (i = 0; i < s->nents; i++) {
         if (strcmp(s->entries[i].sym, sym) == 0) {
             s->error_str = SYMTAB_SUCC;
             return s->entries + i;

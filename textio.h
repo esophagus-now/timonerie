@@ -204,6 +204,14 @@ void del_linebuf(linebuf *l);
 //start off as NULL, but can become non-NULL when you start appending things.
 char *linebuf_append(linebuf *l, char *log);
 
+//Gathers the last h strings form l (starting from offset) and draws them 
+//into the rect defined by x,y,w,h. Returns number of bytes added into buf. 
+//Guaranteed to add less than (10+w)*h bytes into buf, so make sure you 
+//have at least that much space. Returns number of bytes added into buf, or
+//-1 on error (and sets l->error_str if possible). NOTE: returns -2 if l is
+//NULL
+int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf);
+
 typedef struct _msg_win {
     //Stores lines in the message window
     linebuf l;
@@ -274,6 +282,7 @@ extern char const *const TEXTIO_BAD_MODIFIER_CODE;
 extern char const *const TEXTIO_INVALID_PARAM;
 extern char const *const TEXTIO_OOM;
 extern char const *const TEXTIO_MSG_WIN_TOO_SMALL;
+extern char const *const TEXTIO_OOB;
 
 
 #endif

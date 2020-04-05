@@ -8,6 +8,8 @@
  * By the way, I don't expect the user to have more than 200 symbols at any
  * one time, so I also don't care to much about space.
  * */
+ 
+#include "pollfd_array.h"
 
 #define MAX_SYM_SIZE 64
 #define MAX_SYM_DATA 64
@@ -32,9 +34,6 @@ symtab* new_symtab(int howmany);
 //Frees memory allocated in *s. Gracefully ignores NULL input
 void del_symtab(symtab *s);
 
-//Returns 0 on success, else -1 and sets s->error_str
-static int make_space_for_one_more(symtab *s);
-
 //Adds new entry to the end of the symbol table. Makes internal copies of 
 //each input using malloc. Returns 0 on success, -1 on error (and sets 
 //s->error_str). NOTE: returns -2 if p was NULL. 
@@ -51,7 +50,7 @@ int symtab_append_nodup(symtab *s, char *sym, void *dat, int dat_len);
 //element in the array, then decreasing the array's size. Returns 0 on 
 //success, -1 on error (and sets s->error_str appropriately). NOTE: returns
 //-2 if s was NULL
-int symtab_remove_at_index(pollfd_array *p, int ind);
+int symtab_remove_at_index(symtab *s, int ind);
 
 //Tries to remove the symtab_entry pointed to by ent from the array. 
 //Returns 0 on success, -1 on error (and sets s->error_str if possible).
