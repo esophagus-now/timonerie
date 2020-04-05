@@ -19,6 +19,7 @@
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
 #include "pollfd_array.h"
+#include "twm.h"
 
 void producer_cleanup(void *v) {
 #ifdef DEBUG_ON
