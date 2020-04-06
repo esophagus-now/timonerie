@@ -63,6 +63,8 @@ int num_poll_logs = 1000;
 msg_win *err_log = NULL;
 
 twm_tree *t = NULL; //Also fix this too?
+pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 fpga_connection_info *FIX_THIS = NULL;
 
 void got_rl_line(char *str) {
@@ -196,26 +198,30 @@ void callback(new_fpga_cb_info info) {
     dbg_guv_set_name(g, "FIZZCNT");
     
     if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
         int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
         if (rc < 0) {
             char line[80];
             sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
             char *old = msg_win_append(err_log, strdup(line));
             if (old != NULL) free(old);
-        }
+        } 
+        pthread_mutex_unlock(&t_mutex);
     }
     
     dbg_guv *h = &f->guvs[1];
     dbg_guv_set_name(h, "FIZZBUZZ");
     
     if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
         int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
         if (rc < 0) {
             char line[80];
-            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
+            sprintf(line, "Could not add FIZZBUZZ to tree: %s", t->error_str);
             char *old = msg_win_append(err_log, strdup(line));
             if (old != NULL) free(old);
         }
+        pthread_mutex_unlock(&t_mutex);
     }
     
     pollfd_array *p = (pollfd_array *)info.user_data;
@@ -257,7 +263,9 @@ int main(int argc, char **argv) {
         
     err_log = new_msg_win("Message Window");
     
+    pthread_mutex_lock(&t_mutex);
     rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
+    pthread_mutex_unlock(&t_mutex);
     
     //Buffer for constructing strings to write to stdout
     char line[2048];
@@ -278,6 +286,7 @@ int main(int argc, char **argv) {
     while(1) {
         char c;     
         
+        pthread_mutex_lock(&t_mutex);
         //redraw_twm_node_tree(t->head);
         rc = twm_draw_tree(STDOUT_FILENO, t, 1, 23, term_cols, 15);
         if (rc < 0) {
@@ -288,6 +297,7 @@ int main(int argc, char **argv) {
         } else if (rc > 0) {
             if (mode == READLINE) place_readline_cursor();
         }
+        pthread_mutex_unlock(&t_mutex);
         
         //Get network data
         //Are any fds available for reading right now?
@@ -396,6 +406,8 @@ int main(int argc, char **argv) {
         }
         
         //Draw the message window
+        //This is only temporay, to make it easier for me to see error
+        //information
         len = draw_fn_msg_win(err_log, 1, 14, term_cols - 2, 8, line);
         if (len > 0) {
             write(1, line, len);

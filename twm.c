@@ -830,6 +830,7 @@ static int twm_insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_in
         dst->type = TWM_HORZ;
         dst->num_children = 1;
         dst->children[0] = to_add;
+        to_add->parent = dst;
         
         dst_ind = 1;
     }
@@ -848,6 +849,7 @@ static int twm_insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_in
     }
     //Put the new node in the right place
     dst->children[dst_ind] = src;
+    src->parent = dst;
     
     //Make sure to trigger a redraw
     int rc = redraw_twm_node_tree(dst);
@@ -986,6 +988,7 @@ int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
     twm_node *dst = t->focus;
     int dst_ind = dst->num_children;
     
+    
     if (dst->type == TWM_LEAF) {
         twm_node *parent = dst->parent;
         if (parent == NULL) {
@@ -996,6 +999,9 @@ int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
                 return -1; //t->error_str is already set
             }
             
+            t->focus->has_focus = 0;
+            t->focus = to_add;
+            to_add->has_focus = 1;
             //Success
             t->error_str = TWM_SUCC;
             return 0;
@@ -1017,6 +1023,10 @@ int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
         return -1; //t->error_str already set
     }
     
+    t->focus->has_focus = 0;
+    t->focus = to_add;
+    to_add->has_focus = 1;
+
     //Success
     t->error_str = TWM_SUCC;
     return 0;
@@ -1426,6 +1436,8 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h) {
         //Propagate error string
         t->error_str = t->head->error_str;
         return -1;
+    } else if (bytes_needed == 0) {
+        return 0; //Nothing to do
     }
     
     char *buf = malloc(bytes_needed);
