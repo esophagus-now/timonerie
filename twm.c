@@ -246,7 +246,6 @@ int draw_sz_twm_node(void *item, int w, int h) {
         }
         return child_sz;
     } else if (t->type == TWM_HORZ) {
-        
         //In a perfect world, the width (minus the columns needed for drawing
         //separating borders) is an exact multiple of the number of children.
         //However, here we're forced to keep track of how much error we have
@@ -276,7 +275,9 @@ int draw_sz_twm_node(void *item, int w, int h) {
             err += rem;
         }
         
-        //Now add in size we need for drawing the borders, provided this node needs a redraw
+        //Now add in size we need for drawing the borders, provided this 
+        //node needs a redraw
+
         int border_sz = 0;   //Size needed for a single border line
         if (t->need_redraw) {
             border_sz += 10; //Upper bound of bytes needed to place the cursor at the top of the line
@@ -314,6 +315,7 @@ int draw_sz_twm_node(void *item, int w, int h) {
                 t->error_str = t->children[i]->error_str;
                 return child_sz;
             }
+            total_sz += child_sz;
             err += rem;
         }
         
@@ -545,7 +547,7 @@ int twm_tree_move_focus(twm_tree *t, twm_dir dir) {
         
         t->focus = cur;
         t->focus->has_focus = 1;
-        int rc = redraw_twm_node_tree(t->focus);
+        int rc = redraw_twm_node_tree(t->head);
         if (rc < 0) {
             //Propagate error code
             t->error_str = t->focus->error_str;
@@ -899,7 +901,7 @@ static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind)
         if (src_ind < dst_ind) {
             twm_node *tmp = dst->children[src_ind];
             int i;
-            for (i = src_ind; i < dst_ind - 1; i++) {
+            for (i = src_ind; i < dst_ind; i++) {
                 dst->children[i] = dst->children[i + 1];
                 redraw_twm_node_tree(dst->children[i]);
                 //TODO check error codes? Although I have been checking
