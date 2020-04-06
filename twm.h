@@ -24,7 +24,7 @@ extern char const *const TWM_NULL_ARG; // = "NULL argument where non-NULL was ex
 extern char const *const TWM_BAD_DIR; // = "bad direction";
 extern char const *const TWM_OOM; // = "out of memory";
 extern char const *const TWM_OOB; // = "out of bounds";
-extern char const *const TWM_ILLEGAL_DELETE; // = "illegal node deletion";
+extern char const *const TWM_ILLEGAL_DELETE; // = "bad delete (whole tree deletion is disabled)";
 
 //Draws item. Returns number of bytes added into buf, or -1 on error.
 typedef int draw_fn_t(void *item, int x, int y, int w, int h, char *buf);

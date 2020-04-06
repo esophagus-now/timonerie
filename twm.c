@@ -702,15 +702,20 @@ int twm_tree_move_focus(twm_tree *t, twm_dir dir) {
 }
 
 //Follows usual error-return technique. Also makes sure to set redraws
-//where necessary. DOES NOT FREE MEMORY HELD BY SRC!
-static int twm_remove_node(twm_tree *t, twm_node *src) {
+//where necessary. DOES NOT FREE MEMORY HELD BY parent->children[ind]!
+static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
     //Sanity check inputs
     if (t == NULL) {
         return -2; //This is all we can do
     }
     
-    if (src == NULL) {
+    if (parent == NULL) {
         t->error_str = TWM_NULL_ARG;
+        return -1;
+    }
+    
+    if (ind < 0 || ind >= parent->num_children) {
+        t->error_str = TWM_OOB;
         return -1;
     }
     
@@ -718,42 +723,6 @@ static int twm_remove_node(twm_tree *t, twm_node *src) {
     fprintf(stderr, "remove_node precondition: 0x%x\n", check_tree_invariants(t->head));
     fflush(stderr);
     #endif
-    
-    //Actually remove the node
-    
-    //Get a reference to the parent of the node to remove
-    twm_node *parent = src->parent;
-    
-    //Special case: we can only delete the head of the tree if it is a leaf
-    //node
-    if (parent == NULL) {
-        if (src->type != TWM_LEAF) {
-            t->error_str = TWM_ILLEGAL_DELETE;
-            return -1;
-        }
-        
-        t->head = NULL;
-        t->focus = NULL;
-        
-        #ifdef DEBUG_ON
-        fprintf(stderr, "remove_node postcondition: 0x%x\n", check_tree_invariants(t->head));
-        fflush(stderr);
-        #endif
-        
-        //src is not freed!!!
-        
-        t->error_str = TWM_SUCC;
-        return 0;
-    }
-    
-    //Now the general case. First find the index of this node inside its 
-    //parent's list of children
-    int ind = twm_node_indexof(src, parent);
-    if (ind < 0) {
-        //Propagate error
-        t->error_str = parent->error_str;
-        return -1;
-    }
     
     //Remove the node from the list it is in
     int i;
@@ -889,9 +858,24 @@ static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind)
         return -1;
     }
     
+    twm_node *parent = src->parent;
+    
+    if (parent == NULL) {
+        //You're trying to delete the whole tree!
+        t->error_str = TWM_ILLEGAL_DELETE;
+        return -1;
+    }
+    
+    int src_ind = twm_node_indexof(src, parent);
+    if (src_ind < 0) {
+        //Propagate error up
+        t->error_str = parent->error_str;
+        return -1;
+    }
+    
     //If src is already a child of dst, all we have to do is rotate the nodes
     //while making sure to trigger redraws.
-    if (src->parent == dst) {
+    if (parent == dst) {
         int src_ind = twm_node_indexof(src, dst);
         if (src_ind < 0) {
             //Propagate error
@@ -926,7 +910,7 @@ static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind)
         t->error_str = TWM_SUCC;
         return 0;
     }
-    
+      
     //First, place the node where we want it to go. After this call, there
     //will effectively be two copies of the node in the tree. We do this
     //because we must guarantee that dst and dst_ind remain valid at the
@@ -936,10 +920,10 @@ static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind)
         return -1; //t->error_str is already set
     }
     
-    //Now we delete src->children[src_ind] from the tree. This removes the
-    //extra copy. It can also invalidate dst and dst_ind, but we are no
+    //Now we delete parent->children[src_ind] from the tree. This removes 
+    //the extra copy. It can also invalidate dst and dst_ind, but we are no
     //longer using them, so it's not a problem.
-    rc = twm_remove_node(t, src);
+    rc = twm_remove_node(t, parent, src_ind);
     if (rc < 0) {
         return -1; //t->error_str is already set
     }
@@ -1050,13 +1034,20 @@ int twm_tree_remove_focused(twm_tree *t) {
     
     //Try to find a reasonable node to focus on
     twm_node *parent = t->focus->parent;
+    int focus_ind = twm_node_indexof(t->focus, parent);
+    if (focus_ind < 0) {
+        //Propagate error code
+        t->error_str = parent->error_str;
+        return -1;
+    }
+
     twm_node *next_focus;
     
     if (parent == NULL) {
         //This means there was only one node in the tree. Make sure that's
         //the case, then DTRT
         if (t->head != t->focus || t->focus->type != TWM_LEAF) {
-            t->error_str = TWM_INVALID_TREE;
+            t->error_str = TWM_ILLEGAL_DELETE;
             return -1;
         }
         
@@ -1073,18 +1064,11 @@ int twm_tree_remove_focused(twm_tree *t) {
             return -1;
         }
         
-        int ind = twm_node_indexof(t->focus, parent);
-        if (ind < 0) {
-            //Propagate error code
-            t->error_str = parent->error_str;
-            return -1;
-        }
-        
-        ind = (ind + 1) % parent->num_children;
+        int ind = (focus_ind + 1) % parent->num_children;
         next_focus = parent->children[ind];
     }
     
-    int rc = twm_remove_node(t, t->focus);
+    int rc = twm_remove_node(t, parent, focus_ind);
     if (rc < 0) {
         return -1; //twm_remove_node has already set the error code
     }
@@ -1246,7 +1230,14 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
     //we are not at the root of the tree.
     
     //First, remove the focused node from where it used to be
-    int rc = twm_remove_node(t, t->focus);
+    twm_node *parent = t->focus->parent;
+    int focus_ind = twm_node_indexof(t->focus, parent);
+    if (focus_ind < 0) {
+        //Propagate error code
+        t->error_str = parent->error_str;
+        return -1;
+    }
+    int rc = twm_remove_node(t, parent, focus_ind);
     if (rc < 0) {
         return -1; //error_str already set
     }
