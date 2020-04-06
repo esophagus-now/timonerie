@@ -771,6 +771,7 @@ static int twm_remove_node(twm_tree *t, twm_node *src) {
         parent->num_children = tmp->num_children;
         for (i = 0; i < parent->num_children; i++) {
             parent->children[i] = tmp->children[i];
+            parent->children[i]->parent = parent; //That's a mouthful...
         }
         destroy_twm_node(tmp);
         
@@ -926,16 +927,19 @@ static int twm_move_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_ind)
         return 0;
     }
     
-    //First, begin by deleting src->children[src_ind] from the tree. So
-    //long as the invariant that no node has fewer than two children holds,
-    //one can prove that dst and dst_ind will remain valid
-    int rc = twm_remove_node(t, src);
+    //First, place the node where we want it to go. After this call, there
+    //will effectively be two copies of the node in the tree. We do this
+    //because we must guarantee that dst and dst_ind remain valid at the
+    //time of insertion, but we don't care what happens to them later.
+    int rc = twm_insert_node(t, src, dst, dst_ind);
     if (rc < 0) {
         return -1; //t->error_str is already set
     }
     
-    //Now palce the node where we want it to go
-    rc = twm_insert_node(t, src, dst, dst_ind);
+    //Now we delete src->children[src_ind] from the tree. This removes the
+    //extra copy. It can also invalidate dst and dst_ind, but we are no
+    //longer using them, so it's not a problem.
+    rc = twm_remove_node(t, src);
     if (rc < 0) {
         return -1; //t->error_str is already set
     }
@@ -1304,7 +1308,7 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
         }
         break;
     case TWM_RIGHT:
-        new_head = construct_twm_node(TWM_VERT);
+        new_head = construct_twm_node(TWM_HORZ);
         if (new_head == NULL) {
             t->error_str = TWM_OOM;
             return -1;
