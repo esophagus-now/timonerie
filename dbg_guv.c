@@ -21,18 +21,6 @@ char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
 //Static functions/variables//
 //////////////////////////////
 
-//Little helper functions. I probably should have used container_of, but
-//whatever
-static inline msg_win *get_msg_win(dbg_guv *g) {
-    fpga_connection_info *f = g->parent;
-    return &f->logs[g->addr];
-}
-
-static inline pthread_mutex_t *get_msg_win_mutex(dbg_guv *g) {
-    fpga_connection_info *f = g->parent;
-    return &f->logs_mutex[g->addr];
-}
-
 //Thread that manages outgoing network data. Empties fpga->egress queue
 //arg is a pointer to an fpga_connection_info struct
 static void* fpga_egress_thread(void *arg) {
@@ -62,6 +50,28 @@ static void* fpga_egress_thread(void *arg) {
     pthread_exit(NULL);
 }
 
+static void init_dbg_guv(dbg_guv *d, fpga_connection_info *f, int addr) {
+    init_linebuf(&d->logs, DBG_GUV_SCROLLBACK);
+    pthread_mutex_init(&d->logs_mutex, NULL);
+    
+    d->need_redraw = 1; //Need to draw when first added in
+    d->values_unknown = 1;
+    d->parent = f;
+    d->addr = addr;
+} 
+
+static void deinit_dbg_guv(dbg_guv *d) {
+    if (!d) return; //I guess we'll do this?
+    free_linebuf_logs(&d->logs);
+    deinit_linebuf(&d->logs);
+    
+    #ifndef DISABLE_WEIRD_LOCK
+    pthread_mutex_lock(&d->logs_mutex);
+    pthread_mutex_unlock(&d->logs_mutex);
+    #endif
+    pthread_mutex_destroy(&d->logs_mutex);
+}
+
 //A helper function to properly allocate, construct, and initialize an 
 //fpga_connection_info struct.
 static fpga_connection_info *construct_fpga_connection() {
@@ -70,23 +80,7 @@ static fpga_connection_info *construct_fpga_connection() {
     
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-        int rc = init_msg_win(&(ret->logs[i]), NULL);
-        if (rc < 0) {
-            fprintf(stderr, "Could not allocate a msg_win while constructing fpga_connection_info: %s\n", ret->logs[i].error_str);
-            //Clean up everything we allocated so far
-            int j;
-            for (j = i - 1; j >= 0; j--) {
-                pthread_mutex_destroy(&ret->logs_mutex[j]);
-            }
-            free(ret);
-            return NULL;
-        }
-        
-        pthread_mutex_init(&ret->logs_mutex[i], NULL);
-        
-        ret->guvs[i].values_unknown = 1;
-        ret->guvs[i].parent = ret;
-        ret->guvs[i].addr = i;
+        init_dbg_guv(ret->guvs + i, ret, i);
     }
     
     ret->buf_pos = 0;
@@ -262,47 +256,17 @@ void del_fpga_connection(fpga_connection_info *f) {
     //Note that it's up to the caller to make sure no one is going to try 
     //locking these mutexes later
     int i;
-    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-        #ifndef DISABLE_WEIRD_LOCK
-        pthread_mutex_lock(&f->logs_mutex[i]);
-        pthread_mutex_unlock(&f->logs_mutex[i]);
-        #endif
-        pthread_mutex_destroy(&f->logs_mutex[i]);
-        
+    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {        
         //Slow as hell... there must be a better way...
         //Also, I've gotten into trouble here. The append_log function
         //specifically does not malloc or free or copy anything. However, 
         //this fpga_connection_info cleanup assumes that non-NULL strings
         //should be freed. This is inconsistent. I should fix this 
-        linebuf *l = &f->logs[i].l;
-        int j;
-        for (j = 0; j < l->nlines; j++) {
-            #ifdef DEBUG_ON
-            if (l->lines[j] != NULL) {
-                fprintf(stderr, "Attempting to free %p = [%s]\n", l->lines[j], l->lines[j]);
-                fflush(stderr);
-            }
-            #endif
-            if (l->lines[j] != NULL) free(l->lines[j]);
-        }
-        
-        //Free up the stuff from the message window
-        deinit_msg_win(&f->logs[i]);
+        deinit_dbg_guv(&f->guvs[i]);
     }
     
     free(f);
 }
-
-//Thread that manages incoming network data. Stores into fpga->ingress queue
-//arg is a pointer to an fpga_connection_info struct
-void* fpga_ingress_thread(void *arg) {
-    return NULL;
-}
-
-//Note to self (before I forget) in the main thread, we'll have an array of
-//pollfd structs for the call to poll. We'll keep a parallel array F where
-//F[i] is a pointer to the fpga_connection_info struct that manages the fd
-//in pollfd[i]
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
 //do NOT call this function if you are holding a mutex! By the way, does NOT
@@ -312,12 +276,12 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
     if (addr < 0 || addr > MAX_GUVS_PER_FPGA) {
         return NULL;
     }
-    pthread_mutex_lock(&f->logs_mutex[addr]);
-    msg_win *m = f->logs + addr;
-    char *ret = msg_win_append(m, log);
-    pthread_mutex_unlock(&f->logs_mutex[addr]);
+    pthread_mutex_lock(&f->guvs[addr].logs_mutex);
+    linebuf *l = &f->guvs[addr].logs;
+    char *ret = linebuf_append(l, log);
+    pthread_mutex_unlock(&f->guvs[addr].logs_mutex);
     
-    m->need_redraw = 1;
+    f->guvs[addr].need_redraw = 1;
     
     return ret;
 }
@@ -325,55 +289,90 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name) {
-    msg_win *m = get_msg_win(d);
-    msg_win_set_name(m, name);
+    if (d->name != NULL) free(d->name);
+    d->name = strdup(name);
 }
 
-//Returns number of bytes added into buf. Not really safe since there is no
-//way (currently) to avoid writing too much into buf. Should probably try
-//to improve this... returns -1 on error
-int draw_dbg_guv(dbg_guv *g, char *buf) {
-    //Sanity check inputs
-    if (g == NULL || buf == NULL) return -1;
+//Returns number of bytes added into buf, or -1 on error.
+int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
+    dbg_guv *d = (dbg_guv*) item;
+    if (!d) return -1;
     
-    int num_written = 0;
+    if (d->need_redraw == 0) return 0; //Nothing to draw!
     
-    //First, draw the message window in the usual way
-    //Because draw_msg_win reads from a log, we have to lock the appropriate
-    //mutex:
-    pthread_mutex_t *mtx = get_msg_win_mutex(g);
-    pthread_mutex_lock(mtx);
-    //Actually draw the message window
-    msg_win *m = get_msg_win(g);
-    int incr = draw_msg_win(m, buf);
-    pthread_mutex_unlock(mtx);
-    //Cheeky hack: if draw_msg_win returned 0 (or negative) then there is 
-    //nothing for us to draw and we return early
-    if (incr <= 0) {
-        return incr;
-    }
+    //Save old value of buf so we can calculate number of characters added
+    char *buf_saved = buf;
     
-    buf += incr;
-    num_written += incr;
+    //Draw title bar
+    //First, turn on inverted video mode
+    *buf++ = '\e'; *buf++ = '['; *buf++ = '7'; *buf++ = 'm';
     
-    //Now we simply overwrite three characters on the message window to 
-    //indicate our status. It's not the most efficient, but it's not really
-    //that bad
-    incr = cursor_pos_cmd(buf, m->x + m->w-1 -3, m->y);
-    num_written += incr;
+    char status[6];
+    status[0] = '|';
+    status[1] = d->keep_pausing ? 'P' : '-';
+    status[2] = d->keep_logging ? 'L' : (d->log_cnt != 0 ? 'l' : '-');
+    status[3] = d->keep_dropping ? 'D' : (d->drop_cnt != 0 ? 'd' : '-');
+    status[4] = d->inj_TVALID ? 'V' : '-';
+    status[5] = '\0';
+    static char const *const unknown = "|????";
+    
+    int incr = cursor_pos_cmd(buf, x, y);
     buf += incr;
     
-    if (g->values_unknown) {
-        *buf++ = '?';
-        *buf++ = '?';
-        *buf++ = '?';
-        num_written += 3;
-    } else {
-        *buf++ = g->keep_pausing ? 'P' : '-';
-        *buf++ = g->keep_logging ? 'L' : (g->log_cnt > 0 ? 'l' : '-');
-        *buf++ = g->keep_dropping ? 'D' : (g->drop_cnt > 0 ? 'd' : '-');
-        num_written += 3;
-    }
+    sprintf(buf, "%-*.*s%s%n", w - 5, w - 5, d->name, (d->values_unknown ? unknown : status), &incr);
+    buf += incr;
+    //Turn off inverted video
+    *buf++ = '\e'; *buf++ = '['; *buf++ = '2'; *buf++ = '7'; *buf++ = 'm';
     
-    return num_written;
+    //Now simply draw the linebuf
+    pthread_mutex_lock(&d->logs_mutex);
+    incr = draw_linebuf(&d->logs, d->log_pos, x, y + 1, w, h - 1, buf);
+    pthread_mutex_unlock(&d->logs_mutex);
+    
+    if (incr < 0) {
+        //Propagate error, not that it really matters...
+        d->error_str = d->logs.error_str;
+        return -1;
+    }
+    buf += incr;
+    
+    d->need_redraw = 0;
+    
+    return buf - buf_saved;
 }
+
+//Returns how many bytes are needed (can be an upper bound) to draw dbg_guv
+//given the size
+int draw_sz_dbg_guv(void *item, int w, int h) {
+    dbg_guv *d = (dbg_guv*) item;
+    if (!d) return -1;
+    
+    if (d->need_redraw == 0) return 0; //Nothing to draw!
+    
+    int total_sz = 0;
+    total_sz += 10; //Bytes needed to initially position the cursor
+    total_sz += 4; //Bytes needed to invert colours for title bar
+    total_sz += w; //Bytes needed for title bar
+    total_sz += 5; //Bytes needed to turn off inverted colours
+    
+    int log_sz = 10 + w; //Bytes needed to move the cursor to a line, plus the length of a line
+    
+    total_sz += (h-1) * log_sz; //We draw h-1 lines from the linebuf, since the first line is a title bar
+    
+    return total_sz;
+}
+
+//Tells us that we should redraw, probably because we moved to another
+//area of the screen
+void trigger_redraw_dbg_guv(void *item) {
+    dbg_guv *d = (dbg_guv*) item;
+    if (!d) return;
+    
+    d->need_redraw = 1;
+}
+
+draw_operations const dbg_guv_draw_ops = {
+    draw_fn_dbg_guv,
+    draw_sz_dbg_guv,
+    trigger_redraw_dbg_guv
+};

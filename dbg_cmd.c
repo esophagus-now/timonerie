@@ -36,7 +36,7 @@ char const *const DBG_CMD_IMPOSSIBLE        = "The dbg_cmd code somehow reached 
 //Each returns the number of bytes read from str. On error, return -1 and
 //set dest->error_str appropriately
 
-static int parse_dbg_guv_addr(dbg_cmd *dest, char *str) {
+static int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -67,7 +67,7 @@ static int parse_dbg_guv_addr(dbg_cmd *dest, char *str) {
     return (endptr - str);
 }
 
-static int parse_param(dbg_cmd *dest, char *str) {
+static int parse_param(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -98,7 +98,7 @@ static int parse_param(dbg_cmd *dest, char *str) {
     return (endptr - str);
 }
 
-static int parse_action(dbg_cmd *dest, char *str) {
+static int parse_action(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -247,7 +247,7 @@ static int parse_action(dbg_cmd *dest, char *str) {
     return -1;
 }
 
-static int parse_eos (dbg_cmd *dest, char *str) {
+static int parse_eos (dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -271,10 +271,31 @@ static int parse_eos (dbg_cmd *dest, char *str) {
     return num_read;
 }
 
+//Just for syntax
+typedef struct _cmd_info {
+    char *cmd;
+    parse_fn *fn;
+} cmd_info;
+
+static cmd_info builtin_cmds[] = {
+    {"open",	NULL},  //Open FPGA connection
+    {"close",	NULL},  //Close FPGA connection
+    {"sel",	    NULL},  //Select active dbg_guv
+    {"desel",	NULL},  //De-select active dbg_guv
+    {";",	    NULL},  //Issue a command to active dbg_guv
+    {"name",	NULL},  //Rename active dbg_guv
+    {"show",	NULL},  //Show active dbg_guv
+    {"hide",	NULL},  //Hide active dbg_guv
+    {"left",	NULL},  //Move active dbg_guv to the left
+    {"right",	NULL},  //Move active dbg_guv to the right
+    {"up",	    NULL},  //Move active dbg_guv up
+    {"down",	NULL},  //Move active dbg_guv down
+};
+
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
 //(unless dest is NULL, of course). On success returns 0.
-int parse_dbg_cmd(dbg_cmd *dest, char *str) {
+int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do

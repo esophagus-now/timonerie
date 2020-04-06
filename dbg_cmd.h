@@ -1,5 +1,6 @@
 #ifndef DBG_CMD_H
 #define DBG_CMD_H 1
+#include "symtab.h"
 
 //The trick here is that the register names will match to the correct
 //register address in the enum.
@@ -51,10 +52,20 @@ typedef struct _dbg_cmd {
     char smoking_gun;
 } dbg_cmd;
 
+typedef struct _dbg_cmd_ctx {
+    symtab *cmds;
+    symtab *ids;
+    dbg_guv_it active_guv;
+    
+    char const *error_str;
+} dbg_cmd_ctx;
+
+typedef int parse_fn(dbg_cmd *dest, char const *str);
+
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
 //(unless dest is NULL, of course). Otherwise returns 0.
-int parse_dbg_cmd(dbg_cmd *dest, char *str);
+int parse_dbg_cmd(dbg_cmd *dest, char const *str);
 
 
 //////////////////////////////////////////////////

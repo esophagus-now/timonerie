@@ -4,13 +4,26 @@
 #include <pthread.h>
 #include "queue.h"
 #include "textio.h"
+#include "twm.h"
 
 //To fix circular definition of dbg_guv and fpga_connection_info
 struct _fpga_connection_info;
 
+#define DBG_GUV_SCROLLBACK 1000
 //This struct contains all the state associated with displaying dbg_guv
 // information.
-typedef struct _dbg_guv {    
+typedef struct _dbg_guv {
+    //Stores messages received from FGPAs
+    linebuf logs;
+    pthread_mutex_t logs_mutex; //The logs can be accessed from more than one thread
+    int log_pos;
+    char *name;
+    int need_redraw;
+    
+    //Before you get your first command receipt, we don't know what state 
+    //the guvs are in
+    int values_unknown;
+    
     //Mirror registers in hardware
     unsigned keep_pausing;
     unsigned keep_logging;
@@ -25,23 +38,19 @@ typedef struct _dbg_guv {
     unsigned inj_TID;
     unsigned dut_reset;
     
-    //Before you get your first command receipt, we don't know what state 
-    //the guvs are in
-    int values_unknown;
-    
     //Address information for this dbg_guv
     struct _fpga_connection_info *parent;
     int addr; 
+    
+    //Error information
+    char const *error_str;
 } dbg_guv;
 
 #define MAX_GUVS_PER_FPGA 32
 #define FCI_BUF_SIZE 512
-typedef struct _fpga_connection_info {
-    //Place to save logs
-    msg_win logs[MAX_GUVS_PER_FPGA];
-    pthread_mutex_t logs_mutex[MAX_GUVS_PER_FPGA];
-    
-    //For each dbg_guv, keep a local mirror of its control regs
+typedef struct _fpga_connection_info {    
+    //For each dbg_guv, keep a local mirror of its control regs. These 
+    //structs also contain the log buffer
     dbg_guv guvs[MAX_GUVS_PER_FPGA];
     
     //Network connection info
@@ -76,6 +85,14 @@ typedef struct _new_fpga_cb_info {
 
 typedef void new_fpga_cb(new_fpga_cb_info info);
 
+//An "iterator" to a dbg_guv or an fpga_connection_info. If f is NULL, this
+//iterator is considered invalid. If addr is -1, this iterator is considered
+//to be pointing to the fpga_connection_info. 
+typedef struct _dbg_guv_it {
+    fpga_connection_info *f;
+    int addr;
+} dbg_guv_it;
+
 //Idea: this function should take a callback as an argument. This callback
 //will be called from inside a new thread once the socket is connected (or
 //some kind of error occurs)
@@ -103,10 +120,18 @@ char *append_log(fpga_connection_info *f, int addr, char *log);
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name);
 
-//Returns number of bytes added into buf. Not really safe, should probably try
-//to improve this...
-int draw_dbg_guv(dbg_guv *g, char *buf);
+//Returns number of bytes added into buf, or -1 on error.
+int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf);
 
+//Returns how many bytes are needed (can be an upper bound) to draw dbg_guv
+//given the size
+int draw_sz_dbg_guv(void *item, int w, int h);
+
+//Tells us that we should redraw, probably because we moved to another
+//area of the screen
+void trigger_redraw_dbg_guv(void *item);
+
+extern draw_operations const dbg_guv_draw_ops;
 
 ///////////////////////////////////////////////////////
 //Error strings, whose pointers double as error codes//

@@ -19,6 +19,7 @@
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
 #include "pollfd_array.h"
+#include "twm.h"
 
 void producer_cleanup(void *v) {
 #ifdef DEBUG_ON
@@ -60,6 +61,9 @@ int num_poll_logs = 1000;
     
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
+
+twm_tree *t = NULL; //Also fix this too?
+pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 fpga_connection_info *FIX_THIS = NULL;
 
@@ -108,7 +112,6 @@ void got_rl_line(char *str) {
         
         add_history(str);
         dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
-        msg_win *m = &f->logs[cmd.dbg_guv_addr];
         //Seems silly to do yet another switch statement after the one in
         //parse_dbg_cmd... but anyway, it decouples the two bits of code
         //so it's easier for me to change it later if I have to
@@ -150,7 +153,7 @@ void got_rl_line(char *str) {
             g->dut_reset = cmd.param;
             break;
         case LATCH:
-            m->need_redraw = 1;
+            g->need_redraw = 1;
             break;
         default:
             //Just here to get rid of warning for not using everything in the enum
@@ -191,21 +194,35 @@ void callback(new_fpga_cb_info info) {
     }
     FIX_THIS = f;
     
-    msg_win *g = &f->logs[0];
-    g->x = 1;
-    g->y = 7;
-    g->w = 30;
-    g->h = 7;
-    g->visible = 1;
-    msg_win_set_name(g, "FIZZCNT");
+    dbg_guv *g = &f->guvs[0];
+    dbg_guv_set_name(g, "FIZZCNT");
     
-    msg_win *h = &f->logs[1];
-    h->x = 32;
-    h->y = 7;
-    h->w = 30;
-    h->h = 7;
-    h->visible = 1;
-    msg_win_set_name(h, "FIZZBUZZ");
+    if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
+        int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        } 
+        pthread_mutex_unlock(&t_mutex);
+    }
+    
+    dbg_guv *h = &f->guvs[1];
+    dbg_guv_set_name(h, "FIZZBUZZ");
+    
+    if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
+        int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZBUZZ to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        }
+        pthread_mutex_unlock(&t_mutex);
+    }
     
     pollfd_array *p = (pollfd_array *)info.user_data;
     int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
@@ -218,12 +235,19 @@ void callback(new_fpga_cb_info info) {
     }
 }
 
+//Don't forget: callbacks for when SIGWINCH is signalled
+
 int main(int argc, char **argv) {    
+    int rc;
     atexit(clean_screen);
     term_init();
     
     init_readline(got_rl_line);
     
+    t = new_twm_tree();
+    if (!t) {
+        return -1;
+    }
     
     //Set up thread that reads from keyboard/mouse. This will disappear soon
     //once I set up the call to poll() in the main event loop
@@ -238,14 +262,13 @@ int main(int argc, char **argv) {
     new_fpga_connection(callback, "localhost", "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
-    err_log->x = 1;
-    err_log->y = 14;
-    err_log->w = term_cols - 2;
-    err_log->h = 8;
-    err_log->visible = 1;
+    
+    pthread_mutex_lock(&t_mutex);
+    rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
+    pthread_mutex_unlock(&t_mutex);
     
     //Buffer for constructing strings to write to stdout
-    char line[1024];
+    char line[2048];
     int len = 0;
     
     textio_input in;
@@ -261,8 +284,20 @@ int main(int argc, char **argv) {
     
     //Main event loop
     while(1) {
-        int rc;
         char c;     
+        
+        pthread_mutex_lock(&t_mutex);
+        //redraw_twm_node_tree(t->head);
+        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 11, term_cols, (term_rows - 2 - 8 - 2));
+        if (rc < 0) {
+            char *errmsg = malloc(80);
+            sprintf(errmsg, "Could not draw tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, errmsg);
+            if (old != NULL) free(old);
+        } else if (rc > 0) {
+            if (mode == READLINE) place_readline_cursor();
+        }
+        pthread_mutex_unlock(&t_mutex);
         
         //Get network data
         //Are any fds available for reading right now?
@@ -370,38 +405,17 @@ int main(int argc, char **argv) {
             }
         }
         
-        //Resize message window appropriately
-        err_log->w = term_cols - 2;
         //Draw the message window
-        len = draw_msg_win(err_log, line);
+        //This is only temporay, to make it easier for me to see error
+        //information
+        len = draw_fn_msg_win(err_log, 1, 3, term_cols, 8, line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
                 //Put cursor in the right place
                 place_readline_cursor();
             }
-        }
-        
-        if (FIX_THIS != NULL) {
-            //Draw dbg_guvs. This is just a test; later, the user can turn 
-            //windows on and off, and we'll need a smarter loop
-            len = draw_dbg_guv(&FIX_THIS->guvs[0], line);
-            if (len > 0) {
-                write(1, line, len);
-                if (mode == READLINE) {
-                    //Put cursor in the right place
-                    place_readline_cursor();
-                }
-            }
-            
-            len = draw_dbg_guv(&FIX_THIS->guvs[1], line);
-            if (len > 0) {
-                write(1, line, len);
-                if (mode == READLINE) {
-                    //Put cursor in the right place
-                    place_readline_cursor();
-                }
-            }
+            err_log->need_redraw = 0;
         }
         
         //A little slow but we'll read one character at a time, guarding each
@@ -489,54 +503,116 @@ int main(int argc, char **argv) {
                         FN_KEY_NAMES[in.key], 
                         &len
                     );
-                    break;
-                case TEXTIO_GETCH_ESCSEQ:
-                    if (in.code == 'q') {
-                        mode = NORMAL;
-                        enable_mouse_reporting();
+                    if (mode == NORMAL)
+                    switch(in.key) {
+                    case TEXTIO_KEY_UP:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_UP);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_UP);
+                        }
+                        break;
+                    case TEXTIO_KEY_DOWN:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_DOWN);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_DOWN);
+                        }
+                        break;
+                    case TEXTIO_KEY_LEFT:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_LEFT);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_LEFT);
+                        }
+                        break;
+                    case TEXTIO_KEY_RIGHT:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_RIGHT);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_RIGHT);
+                        }
+                        break;
+                    default:
+                        //Remove warnings
                         break;
                     }
-                    sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
+                    
+                    break;
+                case TEXTIO_GETCH_ESCSEQ:
+                    switch(in.code) {
+                    case 'q':
+                        if (mode == READLINE) {
+                            status_drawn = 0;
+                            mode = NORMAL;
+                            enable_mouse_reporting();
+                        } else {
+                            rc = twm_tree_remove_focused(t);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not delete window: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'v':
+                        if (mode == NORMAL) {
+                            rc = twm_set_stack_dir_focused(t, TWM_VERT);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not set to vertical: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'h':
+                        if (mode == NORMAL) {
+                            rc = twm_set_stack_dir_focused(t, TWM_HORZ);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not set to horizontal: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'w':
+                        if (mode == NORMAL) {
+                            rc = twm_toggle_stack_dir_focused(t);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not toggle stack direction: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    default:
+                        sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
+                        break;
+                    }
                     break;
                 case TEXTIO_GETCH_MOUSE: {
                     if (FIX_THIS != NULL) {
-                        msg_win *g = &FIX_THIS->logs[0];
-                        msg_win *h = &FIX_THIS->logs[1];
+                        dbg_guv *g = &FIX_THIS->guvs[0];
+                        dbg_guv *h = &FIX_THIS->guvs[1];
                         //Just for fun: use scrollwheel inside dbg_guv
                         if (in.btn == TEXTIO_WUP) {
-                            if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                                if (g->buf_offset < g->l.nlines - g->h - 1) g->buf_offset++;
-                                g->need_redraw = 1;
-                            }
-                        } else if (in.btn == TEXTIO_WDN) {
-                            if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                                if (g->buf_offset > 0) g->buf_offset--;
-                                g->need_redraw = 1;
-                            }
-                        }
-                        
-                        if (in.btn == TEXTIO_WUP) {
-                            if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                                if (h->buf_offset < h->l.nlines - h->h - 1) h->buf_offset++;
-                                h->need_redraw = 1;
-                            }
-                        } else if (in.btn == TEXTIO_WDN) {
-                            if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                                if (h->buf_offset > 0) h->buf_offset--;
-                                h->need_redraw = 1;
-                            }
-                        }
-                    }
-                    //Again: this is just for fun! This is not staying around permanently, I promise!
-                    if (in.btn == TEXTIO_WUP) {
-                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
-                            if (err_log->buf_offset < err_log->l.nlines - err_log->h - 1) err_log->buf_offset++;
+                            g->need_redraw = 1;
+                            if (g->log_pos < DBG_GUV_SCROLLBACK - 1) g->log_pos++;
+                            h->need_redraw = 1;
+                            if (h->log_pos < DBG_GUV_SCROLLBACK - 1) h->log_pos++;
                             err_log->need_redraw = 1;
-                        }
-                    } else if (in.btn == TEXTIO_WDN) {
-                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
+                            if (err_log->buf_offset < MSG_WIN_SCROLLBACK - 1) err_log->buf_offset++;
+                        } else if (in.btn == TEXTIO_WDN) {
+                            g->need_redraw = 1;
+                            if (g->log_pos > 0) g->log_pos--;
+                            h->need_redraw = 1;
+                            if (h->log_pos > 0) h->log_pos--;
+                            err_log->need_redraw = 1;
                             if (err_log->buf_offset > 0) err_log->buf_offset--;
-                            err_log->need_redraw = 1;
                         }
                     }
                     

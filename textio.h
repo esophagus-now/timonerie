@@ -3,6 +3,7 @@
 
 #include <termios.h>
 #include "queue.h"
+#include "twm.h"
 
 #define ESCAPE "\x1b"
 #define CSI "\x1b["
@@ -192,7 +193,11 @@ int init_linebuf(linebuf *l, int nlines);
 //NOTE: all log entries are initialized to NULL
 linebuf *new_linebuf(int nlines);
 
-//Frees memory allocated with init_linebuf. Gracefully ignores NULL input
+//Frees all non-NULL logs stored in l. Gracefully ignores NULL input
+void free_linebuf_logs(linebuf *l);
+
+//Frees memory allocated with init_linebuf. Does not free whatever is still
+//inside l.lines[]. Gracefully ignores NULL input
 void deinit_linebuf(linebuf *l);
 
 //Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
@@ -204,17 +209,23 @@ void del_linebuf(linebuf *l);
 //start off as NULL, but can become non-NULL when you start appending things.
 char *linebuf_append(linebuf *l, char *log);
 
+//Gathers the last h strings form l (starting from offset) and draws them 
+//into the rect defined by x,y,w,h. Returns number of bytes added into buf. 
+//Guaranteed to add less than (10+w)*h bytes into buf, so make sure you 
+//have at least that much space. Returns number of bytes added into buf, or
+//-1 on error (and sets l->error_str if possible). NOTE: returns -2 if l is
+//NULL
+int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf);
+
+#define MSG_WIN_SCROLLBACK 1000
 typedef struct _msg_win {
     //Stores lines in the message window
     linebuf l;
+    int buf_offset;
     
     //Display information
     char name[32];
-    int x, y; 
-    int w, h; //Minimum: 6 by 6?
-    int buf_offset; //Where to start reading from linebuffer
     int need_redraw;
-    int visible;
     
     //Error information
     char const *error_str;
@@ -250,9 +261,18 @@ void msg_win_set_name(msg_win *m, char *name);
 //Finally, a redraw is triggered,
 char* msg_win_append(msg_win *m, char *log);
 
-//Returns number of bytes added into buf. Not really safe, should probably try
-//to improve this... returns -1 on error.
-int draw_msg_win(msg_win *m, char *buf);
+//Returns number of bytes added into buf, or -1 on error.
+int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf);
+
+//Returns how many bytes are needed (can be an upper bound) to draw dbg_guv
+//given the size
+int draw_sz_msg_win(void *item, int w, int h);
+
+//Tells us that we should redraw, probably because we moved to another
+//area of the screen
+void trigger_redraw_msg_win(void *item);
+
+extern draw_operations const msg_win_draw_ops;
 
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//
@@ -274,6 +294,7 @@ extern char const *const TEXTIO_BAD_MODIFIER_CODE;
 extern char const *const TEXTIO_INVALID_PARAM;
 extern char const *const TEXTIO_OOM;
 extern char const *const TEXTIO_MSG_WIN_TOO_SMALL;
+extern char const *const TEXTIO_OOB;
 
 
 #endif
