@@ -288,7 +288,7 @@ int main(int argc, char **argv) {
         
         pthread_mutex_lock(&t_mutex);
         //redraw_twm_node_tree(t->head);
-        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 23, term_cols, 15);
+        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 11, term_cols, (term_rows - 2 - 8 - 2));
         if (rc < 0) {
             char *errmsg = malloc(80);
             sprintf(errmsg, "Could not draw tree: %s", t->error_str);
@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
         //Draw the message window
         //This is only temporay, to make it easier for me to see error
         //information
-        len = draw_fn_msg_win(err_log, 1, 14, term_cols - 2, 8, line);
+        len = draw_fn_msg_win(err_log, 1, 3, term_cols, 8, line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -503,6 +503,41 @@ int main(int argc, char **argv) {
                         FN_KEY_NAMES[in.key], 
                         &len
                     );
+                    if (mode == NORMAL)
+                    switch(in.key) {
+                    case TEXTIO_KEY_UP:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_UP);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_UP);
+                        }
+                        break;
+                    case TEXTIO_KEY_DOWN:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_DOWN);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_DOWN);
+                        }
+                        break;
+                    case TEXTIO_KEY_LEFT:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_LEFT);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_LEFT);
+                        }
+                        break;
+                    case TEXTIO_KEY_RIGHT:
+                        if (in.meta) {
+                            twm_tree_move_focused_node(t, TWM_RIGHT);
+                        } else if (!in.shift && !in.ctrl) {
+                            twm_tree_move_focus(t, TWM_RIGHT);
+                        }
+                        break;
+                    default:
+                        //Remove warnings
+                        break;
+                    }
+                    
                     break;
                 case TEXTIO_GETCH_ESCSEQ:
                     if (in.code == 'q') {

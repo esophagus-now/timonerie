@@ -805,10 +805,6 @@ static int twm_insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_in
         t->error_str = TWM_NULL_ARG;
         return -1;
     }
-    if (dst_ind < 0 || dst_ind > dst->num_children) {
-        t->error_str = TWM_BAD_POS;
-        return -1;
-    }
     
     //Corner case: if there is only one node in the tree, then it is a leaf
     //and we need to convert it to a stacked node
@@ -833,6 +829,9 @@ static int twm_insert_node(twm_tree *t, twm_node *src, twm_node *dst, int dst_in
         to_add->parent = dst;
         
         dst_ind = 1;
+    } else if (dst_ind < 0 || dst_ind > dst->num_children) {
+        t->error_str = TWM_BAD_POS;
+        return -1;
     }
     
     //Now we can write the general function
@@ -1008,7 +1007,7 @@ int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
         } 
         
         dst = parent;
-        dst_ind = twm_node_indexof(t->focus, dst);
+        dst_ind = twm_node_indexof(t->focus, dst) + 1; //Place new win after focused
         if (dst_ind < 0) {
             //Propagate error up
             t->error_str = dst->error_str;
@@ -1131,9 +1130,7 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
     twm_node *cur = t->focus->parent;
     twm_node *prev = t->focus;
     
-    //This is a bit hacky. Since we're inserting a new node, all the later
-    //nodes will shift down, so we use 0 in place of -1 for the direction
-    int list_dir = (dir == TWM_UP || dir == TWM_LEFT) ? 0 : 1;
+    int list_dir = (dir == TWM_UP || dir == TWM_LEFT) ? -1 : 1;
     
     while (cur != NULL) {
         //If we are going TWM_UP or TWM_DOWN, and cur is a TWM_HORZ node,
@@ -1177,8 +1174,8 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
         int insertion_ind = ind + list_dir;
         
         //However, first check if we need to move down a hierarchy.
-        twm_node *adjacent = cur->children[ind + 2*list_dir - 1];
-        if (adjacent != TWM_LEAF) {
+        twm_node *adjacent = cur->children[ind + list_dir];
+        if (adjacent->type != TWM_LEAF) {
             //Travel down hierarchy until we find the correct place
             if (list_dir == 1) {
                 //Find "leftmost" child

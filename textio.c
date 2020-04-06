@@ -418,13 +418,13 @@ static int convert_csi_fn_key(textio_input *res) {
     case 'C':
         //Right arrow
         res->type = TEXTIO_GETCH_FN_KEY;
-        res->key = TEXTIO_KEY_LEFT;
+        res->key = TEXTIO_KEY_RIGHT;
         if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
         return 0;
     case 'D':
         //Left arrow
         res->type = TEXTIO_GETCH_FN_KEY;
-        res->key = TEXTIO_KEY_RIGHT;
+        res->key = TEXTIO_KEY_LEFT;
         if (res->num_params == 2) return parse_modifier_code(res->params[1], res);
         return 0;
     case 'P':
