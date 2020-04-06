@@ -316,7 +316,9 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     status[5] = '\0';
     static char const *const unknown = "|????";
     
-    int incr;
+    int incr = cursor_pos_cmd(buf, x, y);
+    buf += incr;
+    
     sprintf(buf, "%-*.*s%s%n", w - 5, w - 5, d->name, (d->values_unknown ? unknown : status), &incr);
     buf += incr;
     //Turn off inverted video
@@ -333,6 +335,8 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
         return -1;
     }
     buf += incr;
+    
+    d->need_redraw = 0;
     
     return buf - buf_saved;
 }
