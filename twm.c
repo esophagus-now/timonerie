@@ -2,7 +2,10 @@
 #include <stdio.h>
 #endif
 
+#include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
 #include "textio.h"
 #include "twm.h"
 
@@ -1399,6 +1402,50 @@ int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type) {
     //Nothing to do
     t->error_str = TWM_SUCC;
     return -1;
+}
+
+//write()s the data described by t into fd, given the target screen size
+//and coordinates. Follows usual error return technique
+int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h) {
+    if (t == NULL) {
+        return -2;
+    }
+    
+    if (x < 0 || y < 0) {
+        t->error_str = TWM_BAD_POS;
+        return -1;
+    }
+    
+    if (w < 0 || h < 0) {
+        t->error_str = TWM_BAD_SZ;
+        return -1;
+    }
+    
+    int bytes_needed = draw_sz_twm_node(t->head, w, h);
+    if (bytes_needed < 0) {
+        return -1; //t->error_str already set
+    }
+    
+    char *buf = malloc(bytes_needed);
+    int len = draw_fn_twm_node(t->head, x, y, w, h, buf);
+    
+    if (len < 0) {
+        return -1; //t->error_str already set
+    }
+    
+    int rc = write(fd, buf, len);
+    if (rc < 0) {
+        t->error_str = strerror(errno);
+    }
+    return rc;
+}
+
+char const* twm_tree_strerror(twm_tree *t) {
+    if (t == NULL) {
+        return NULL;
+    }
+    
+    return t->error_str;
 }
 
 //////////////////////////////////////////////////

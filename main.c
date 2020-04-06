@@ -109,7 +109,6 @@ void got_rl_line(char *str) {
         
         add_history(str);
         dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
-        msg_win *m = &f->logs[cmd.dbg_guv_addr];
         //Seems silly to do yet another switch statement after the one in
         //parse_dbg_cmd... but anyway, it decouples the two bits of code
         //so it's easier for me to change it later if I have to
@@ -151,7 +150,7 @@ void got_rl_line(char *str) {
             g->dut_reset = cmd.param;
             break;
         case LATCH:
-            m->need_redraw = 1;
+            g->need_redraw = 1;
             break;
         default:
             //Just here to get rid of warning for not using everything in the enum
@@ -192,21 +191,11 @@ void callback(new_fpga_cb_info info) {
     }
     FIX_THIS = f;
     
-    msg_win *g = &f->logs[0];
-    g->x = 1;
-    g->y = 7;
-    g->w = 30;
-    g->h = 7;
-    g->visible = 1;
-    msg_win_set_name(g, "FIZZCNT");
+    dbg_guv *g = &f->guvs[0];
+    dbg_guv_set_name(g, "FIZZCNT");
     
-    msg_win *h = &f->logs[1];
-    h->x = 32;
-    h->y = 7;
-    h->w = 30;
-    h->h = 7;
-    h->visible = 1;
-    msg_win_set_name(h, "FIZZBUZZ");
+    dbg_guv *h = &f->guvs[1];
+    dbg_guv_set_name(h, "FIZZBUZZ");
     
     pollfd_array *p = (pollfd_array *)info.user_data;
     int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
@@ -386,7 +375,7 @@ int main(int argc, char **argv) {
         if (FIX_THIS != NULL) {
             //Draw dbg_guvs. This is just a test; later, the user can turn 
             //windows on and off, and we'll need a smarter loop
-            len = draw_dbg_guv(&FIX_THIS->guvs[0], line);
+            len = draw_fn_dbg_guv(&FIX_THIS->guvs[0], 1, 7, 30, 7, line);
             if (len > 0) {
                 write(1, line, len);
                 if (mode == READLINE) {
@@ -395,7 +384,7 @@ int main(int argc, char **argv) {
                 }
             }
             
-            len = draw_dbg_guv(&FIX_THIS->guvs[1], line);
+            len = draw_fn_dbg_guv(&FIX_THIS->guvs[1], 32, 7, 30, 7, line);
             if (len > 0) {
                 write(1, line, len);
                 if (mode == READLINE) {
@@ -501,31 +490,19 @@ int main(int argc, char **argv) {
                     break;
                 case TEXTIO_GETCH_MOUSE: {
                     if (FIX_THIS != NULL) {
-                        msg_win *g = &FIX_THIS->logs[0];
-                        msg_win *h = &FIX_THIS->logs[1];
+                        dbg_guv *g = &FIX_THIS->guvs[0];
+                        dbg_guv *h = &FIX_THIS->guvs[1];
                         //Just for fun: use scrollwheel inside dbg_guv
                         if (in.btn == TEXTIO_WUP) {
-                            if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                                if (g->buf_offset < g->l.nlines - g->h - 1) g->buf_offset++;
-                                g->need_redraw = 1;
-                            }
+                            g->need_redraw = 1;
+                            if (g->log_pos < DBG_GUV_SCROLLBACK - 1) g->log_pos++;
+                            h->need_redraw = 1;
+                            if (h->log_pos < DBG_GUV_SCROLLBACK - 1) h->log_pos++;
                         } else if (in.btn == TEXTIO_WDN) {
-                            if (in.x >= g->x && in.x < g->x + g->w && in.y >= g->y && in.y < g->y + g->h) {
-                                if (g->buf_offset > 0) g->buf_offset--;
-                                g->need_redraw = 1;
-                            }
-                        }
-                        
-                        if (in.btn == TEXTIO_WUP) {
-                            if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                                if (h->buf_offset < h->l.nlines - h->h - 1) h->buf_offset++;
-                                h->need_redraw = 1;
-                            }
-                        } else if (in.btn == TEXTIO_WDN) {
-                            if (in.x >= h->x && in.x < h->x + h->w && in.y >= h->y && in.y < h->y + h->h) {
-                                if (h->buf_offset > 0) h->buf_offset--;
-                                h->need_redraw = 1;
-                            }
+                            g->need_redraw = 1;
+                            if (g->log_pos > 0) g->log_pos--;
+                            h->need_redraw = 1;
+                            if (h->log_pos > 0) h->log_pos--;
                         }
                     }
                     //Again: this is just for fun! This is not staying around permanently, I promise!

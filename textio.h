@@ -192,7 +192,11 @@ int init_linebuf(linebuf *l, int nlines);
 //NOTE: all log entries are initialized to NULL
 linebuf *new_linebuf(int nlines);
 
-//Frees memory allocated with init_linebuf. Gracefully ignores NULL input
+//Frees all non-NULL logs stored in l. Gracefully ignores NULL input
+void free_linebuf_logs(linebuf *l);
+
+//Frees memory allocated with init_linebuf. Does not free whatever is still
+//inside l.lines[]. Gracefully ignores NULL input
 void deinit_linebuf(linebuf *l);
 
 //Deletes a linebuf allocated with new_linebuf. Gracefuly ignores NULL input
