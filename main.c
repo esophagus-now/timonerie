@@ -208,6 +208,8 @@ void callback(new_fpga_cb_info info) {
     }
 }
 
+//Don't forget: callbacks for when SIGWINCH is signalled
+
 int main(int argc, char **argv) {    
     atexit(clean_screen);
     term_init();
@@ -228,11 +230,6 @@ int main(int argc, char **argv) {
     new_fpga_connection(callback, "localhost", "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
-    err_log->x = 1;
-    err_log->y = 14;
-    err_log->w = term_cols - 2;
-    err_log->h = 8;
-    err_log->visible = 1;
     
     //Buffer for constructing strings to write to stdout
     char line[2048];
@@ -360,10 +357,8 @@ int main(int argc, char **argv) {
             }
         }
         
-        //Resize message window appropriately
-        err_log->w = term_cols - 2;
         //Draw the message window
-        len = draw_msg_win(err_log, line);
+        len = draw_fn_msg_win(err_log, 1, 14, term_cols - 2, 8, line);
         if (len > 0) {
             write(1, line, len);
             if (mode == READLINE) {
@@ -498,23 +493,15 @@ int main(int argc, char **argv) {
                             if (g->log_pos < DBG_GUV_SCROLLBACK - 1) g->log_pos++;
                             h->need_redraw = 1;
                             if (h->log_pos < DBG_GUV_SCROLLBACK - 1) h->log_pos++;
+                            err_log->need_redraw = 1;
+                            if (err_log->buf_offset < MSG_WIN_SCROLLBACK - 1) err_log->buf_offset++;
                         } else if (in.btn == TEXTIO_WDN) {
                             g->need_redraw = 1;
                             if (g->log_pos > 0) g->log_pos--;
                             h->need_redraw = 1;
                             if (h->log_pos > 0) h->log_pos--;
-                        }
-                    }
-                    //Again: this is just for fun! This is not staying around permanently, I promise!
-                    if (in.btn == TEXTIO_WUP) {
-                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
-                            if (err_log->buf_offset < err_log->l.nlines - err_log->h - 1) err_log->buf_offset++;
                             err_log->need_redraw = 1;
-                        }
-                    } else if (in.btn == TEXTIO_WDN) {
-                        if (in.x >= err_log->x && in.x < err_log->x + err_log->w && in.y >= err_log->y && in.y < err_log->y + err_log->h) {
                             if (err_log->buf_offset > 0) err_log->buf_offset--;
-                            err_log->need_redraw = 1;
                         }
                     }
                     

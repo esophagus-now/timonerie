@@ -216,17 +216,15 @@ char *linebuf_append(linebuf *l, char *log);
 //NULL
 int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf);
 
+#define MSG_WIN_SCROLLBACK 1000
 typedef struct _msg_win {
     //Stores lines in the message window
     linebuf l;
+    int buf_offset;
     
     //Display information
     char name[32];
-    int x, y; 
-    int w, h; //Minimum: 6 by 6?
-    int buf_offset; //Where to start reading from linebuffer
     int need_redraw;
-    int visible;
     
     //Error information
     char const *error_str;
@@ -262,9 +260,16 @@ void msg_win_set_name(msg_win *m, char *name);
 //Finally, a redraw is triggered,
 char* msg_win_append(msg_win *m, char *log);
 
-//Returns number of bytes added into buf. Not really safe, should probably try
-//to improve this... returns -1 on error.
-int draw_msg_win(msg_win *m, char *buf);
+//Returns number of bytes added into buf, or -1 on error.
+int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf);
+
+//Returns how many bytes are needed (can be an upper bound) to draw dbg_guv
+//given the size
+int draw_sz_msg_win(void *item, int w, int h);
+
+//Tells us that we should redraw, probably because we moved to another
+//area of the screen
+void trigger_redraw_msg_win(void *item);
 
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//

@@ -916,8 +916,6 @@ int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf) 
     return buf - buf_saved;
 }
 
-#define SCROLLBACK 1000
-
 //Statically initialize a msg_win. If name is not NULL, this name is copied
 //into the msg_win struct. Returns 0 on success, negative on error.
 //In fact, -1 on general error (and sets l->error_str accordingly) and -2
@@ -930,7 +928,7 @@ int init_msg_win(msg_win *m, char const *name) {
     }
     
     //For now, msg_wins have SCROLLBACK lines of scrollback
-    int rc = init_linebuf(&m->l, SCROLLBACK); //Note: guaranteed that &m->l is not NULL
+    int rc = init_linebuf(&m->l, MSG_WIN_SCROLLBACK); //Note: guaranteed that &m->l is not NULL
     if (rc < 0) {
         //Propagate error upward
         m->error_str = m->l.error_str;
@@ -946,17 +944,11 @@ int init_msg_win(msg_win *m, char const *name) {
         m->name[32] = 0; //For extra safety
     }
     
-    //Give reasonable defaults to position and size
-    m->x = 1;
-    m->y = 1;
-    m->w = 14;
-    m->h = 6;
+    //Give reasonable defaults
     //By default, show most recent messages
     m->buf_offset = 0;
     //Make sure we get drawn
     m->need_redraw = 1;
-    //By default, don't show ourselves
-    m->visible = 0;
     
     //All done with no errors
     m->error_str = TEXTIO_SUCC;
@@ -1007,16 +999,7 @@ void del_msg_win(msg_win *m) {
 //If the strings you've saved in m are allocated with malloc, you can use
 //this helper function to free them all
 void free_msg_win_logs(msg_win *m) {
-    int i;
-    
-    //Cleans up the code a little
-    linebuf *l = &m->l;
-    
-    for (i = 0; i < l->nlines; i++) {
-        if (l->lines[i] != NULL) free(l->lines[i]);
-    }
-    
-    l->nlines = 0;
+    free_linebuf_logs(&m->l);
 }
 
 //Duplicates string in name (if non-NULL) and saves it into m. 
@@ -1035,92 +1018,71 @@ char* msg_win_append(msg_win *m, char *log) {
     return ret;
 }
 
-//Returns number of bytes added into buf. Not really safe, should probably try
-//to improve this... returns -1 on error.
-int draw_msg_win(msg_win *m, char *buf) {
-    //Check if we need a redraw
-    if (m->need_redraw == 0 || m->visible == 0) return 0;
-    if (m->w < 12 || m->h < 6) {
-        m->need_redraw = 0;
-        m->error_str = TEXTIO_MSG_WIN_TOO_SMALL;
-        return -1;
-    }
-    char *buf_saved = buf;
-    //Draw top row
-    //Move to top-left
-    int incr = cursor_pos_cmd(buf, m->x, m->y);
-    buf += incr;
-    int len;
-    sprintf(buf, "+%.*s-%n",
-        m->w - 6,
-        m->name,
-        &len
-    );
-    buf += len;
-    int i;
-    for (i = len; i < m->w - 1; i++) *buf++ = '-';
-    *buf++ = '+';
-    /*
-    //Draw logs and box edges
-    for (i = m->h-2-1; i >= 0; i--) {
-        //Move the cursor
-        incr = cursor_pos_cmd(buf, m->x, m->y + 1 + (m->h-2-1 - i)); //I hope there's no OBOE
-        buf += incr;
-        
-        //Compute index into line buffer's scrollback 
-        int ind = m->l.pos - 1 - m->buf_offset - i;
-        //wrap into the right range (it's circular buffer)
-        ind = (ind + m->l.nlines) % m->l.nlines;
-        
-        //Construct the string that we will print
-        sprintf(buf, "|%-*.*s|%n", m->w-2, m->w-2, m->l.lines[ind], &incr);
-        buf += incr;        
-    }    
-    */
+
+//Returns number of bytes added into buf, or -1 on error.
+int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {        
+    msg_win *m = (msg_win*) item;
+    if (!m) return -1;
     
-    incr = draw_linebuf(&m->l, m->buf_offset, m->x + 1, m->y + 1, m->w - 2, m->h - 2, buf);
+    if (m->need_redraw == 0) return 0; //Nothing to draw!
+    
+    //Save old value of buf so we can calculate number of characters added
+    char *buf_saved = buf;
+    
+    //Draw title bar
+    //First, turn on inverted video mode
+    *buf++ = '\e'; *buf++ = '['; *buf++ = '7'; *buf++ = 'm';
+    
+    int incr = cursor_pos_cmd(buf, x, y);
+    buf += incr;
+    
+    sprintf(buf, "%-*.*s%n", w, w, m->name, &incr);
+    buf += incr;
+    //Turn off inverted video
+    *buf++ = '\e'; *buf++ = '['; *buf++ = '2'; *buf++ = '7'; *buf++ = 'm';
+    
+    //Now simply draw the linebuf
+    incr = draw_linebuf(&m->l, m->buf_offset, x, y + 1, w, h - 1, buf);
+    
     if (incr < 0) {
-        //Propagate error code up
+        //Propagate error, not that it really matters...
         m->error_str = m->l.error_str;
         return -1;
     }
     buf += incr;
     
-    //Tricky business: draw vertical lines for border
-    incr = cursor_pos_cmd(buf, m->x, m->y+1);
-    buf += incr;
-    *buf++ = '|';
-    for (i = 1; i < m->h-2; i++) {
-        *buf++ = '\e';
-        *buf++ = '[';
-        *buf++ = 'B'; //Special CSI sequence to move cursor down
-        *buf++ = '\e';
-        *buf++ = '[';
-        *buf++ = 'D'; //Special CSI sequence to move cursor left
-        *buf++ = '|';
-    }
-    
-    incr = cursor_pos_cmd(buf, m->x + m->w-1, m->y+1);
-    buf += incr;
-    *buf++ = '|';
-    for (i = 1; i < m->h-2; i++) {
-        *buf++ = '\e';
-        *buf++ = '[';
-        *buf++ = 'B'; //Special CSI sequence to move cursor down
-        *buf++ = '\e';
-        *buf++ = '[';
-        *buf++ = 'D'; //Special CSI sequence to move cursor left
-        *buf++ = '|';
-    }
-    
-    //Draw bottom row
-    //Move to bottom-left
-    incr = cursor_pos_cmd(buf, m->x, m->y + m->h - 1);
-    buf += incr;
-    *buf++ = '+';
-    for (i = 1; i < m->w - 1; i++) *buf++ = '-';
-    *buf++ = '+';
-    
     m->need_redraw = 0;
+    
     return buf - buf_saved;
+}
+
+//Returns how many bytes are needed (can be an upper bound) to draw dbg_guv
+//given the size
+int draw_sz_msg_win(void *item, int w, int h) {
+    msg_win *m = (msg_win*) item;
+    if (!m) return -1;
+    
+    if (m->need_redraw == 0) return 0; //Nothing to draw!
+    
+    int total_sz = 0;
+    total_sz += 10; //Bytes needed to initially position the cursor
+    total_sz += 4; //Bytes needed to invert colours for title bar
+    total_sz += w; //Bytes needed for title bar
+    total_sz += 5; //Bytes needed to turn off inverted colours
+    
+    int log_sz = 10 + w; //Bytes needed to move the cursor to a line, plus the length of a line
+    
+    total_sz += (h-1) * log_sz; //We draw h-1 lines from the linebuf, since the first line is a title bar
+    
+    return total_sz;
+    
+}
+
+//Tells us that we should redraw, probably because we moved to another
+//area of the screen
+void trigger_redraw_msg_win(void *item) {
+    msg_win *m = (msg_win*) item;
+    if (!m) return;
+    
+    m->need_redraw = 1;
 }
