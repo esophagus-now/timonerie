@@ -540,12 +540,59 @@ int main(int argc, char **argv) {
                     
                     break;
                 case TEXTIO_GETCH_ESCSEQ:
-                    if (in.code == 'q') {
-                        mode = NORMAL;
-                        enable_mouse_reporting();
+                    switch(in.code) {
+                    case 'q':
+                        if (mode == READLINE) {
+                            status_drawn = 0;
+                            mode = NORMAL;
+                            enable_mouse_reporting();
+                        } else {
+                            rc = twm_tree_remove_focused(t);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not delete window: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'v':
+                        if (mode == NORMAL) {
+                            rc = twm_set_stack_dir_focused(t, TWM_VERT);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not set to vertical: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'h':
+                        if (mode == NORMAL) {
+                            rc = twm_set_stack_dir_focused(t, TWM_HORZ);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not set to horizontal: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'w':
+                        if (mode == NORMAL) {
+                            rc = twm_toggle_stack_dir_focused(t);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not toggle stack direction: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    default:
+                        sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                         break;
                     }
-                    sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                     break;
                 case TEXTIO_GETCH_MOUSE: {
                     if (FIX_THIS != NULL) {

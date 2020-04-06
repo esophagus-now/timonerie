@@ -751,6 +751,28 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
         //Make sure we redraw this node and all its children, which have
         //almost certainly all moved
         redraw_twm_node_tree(parent);
+    } else if (parent->num_children == 0) {
+        //Recursively remove the parent
+        twm_node *grandparent = parent->parent;
+        if (grandparent == NULL) {
+            //Trying to delete the whole tree
+            t->error_str = TWM_ILLEGAL_DELETE; //TODO: this isn't really an error, 
+            //Basically, it's legal to delete the whole tree, but for some reason I'm scared to just
+            //have the code do that. I'm not sure why
+            return -1;
+        }
+        
+        int parent_ind = twm_node_indexof(parent, grandparent);
+        if (parent_ind < 0) {
+            //Propagate error
+            t->error_str = grandparent->error_str;
+            return -1;
+        }
+        
+        int rc = twm_remove_node(t, grandparent, parent_ind);
+        if (rc < 0) {
+            return -1; //t->error_str already set
+        }
     }
     
     #ifdef DEBUG_ON
@@ -1330,6 +1352,28 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
     return 0;
 }
 
+static int wrap_leaf(twm_node *t) {
+    if (t == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    //Take this node and make it a TWM_LEAF child of a TWM_HORZ node
+    twm_node *to_add = construct_leaf_twm_node(t->item, t->draw_ops);
+    if (to_add == NULL) {
+        t->error_str = TWM_OOM;
+        return -1;
+    }
+    
+    t->type = TWM_HORZ;
+    t->num_children = 1;
+    t->children[0] = to_add;
+    
+    to_add->parent = t;
+    
+    t->error_str = TWM_SUCC;
+    return 0;
+}
+
 //Sets stack direction of active focus node. Returns -1 on error and sets
 //t->error_str (or returns -2 if t was NULL)
 int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type) {
@@ -1337,39 +1381,39 @@ int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type) {
     if (t == NULL) {
         return -2; //This is all we can do
     }
-    if (type != TWM_HORZ || type != TWM_VERT) {
+    if (type != TWM_HORZ && type != TWM_VERT) {
         t->error_str = TWM_BAD_NODE_TYPE;
         return -1;
     }
-    
     if (t->focus == NULL) {
         //No focus; nothing to do
         t->error_str = TWM_SUCC;
         return 0;
     }
     
-    twm_node *parent = t->focus->parent;
-    //If the focused node is the root of the tree...
-    if (parent == NULL) {
-        //The focused node must be a LEAF and the head (as long as the tree
-        //is in a valid state). Double-check this, and then make the node
-        //into a stacked node
-        if (t->focus->type != TWM_LEAF || t->focus != t->head) {
-            t->error_str = TWM_INVALID_TREE;
-            return -1;
+    if (t->focus->type == TWM_LEAF) {
+        //Special rule: if the user tries to set a leaf node's stack 
+        //direction, then create a new stacked node and put this leaf as
+        //its child. However, we don't want to do that if the leaf node is
+        //already the single child of a node
+        
+        twm_node *parent = t->focus->parent;
+        //We wrap the node if it has no parent or if it is not an only child
+        if (parent == NULL || parent->num_children > 1) {                
+            int rc = wrap_leaf(t->focus);
+            if (rc < 0) {
+                //Propagate error
+                t->error_str = t->focus->error_str;
+                return -1;
+            }
+            t->focus->type = type;
+        } else {
+            parent->type = type;
+            t->focus->has_focus = 0;
+            t->focus = parent;
+            t->focus->has_focus = 1;
         }
-        
-        //Take this node and make it a TWM_LEAF child of a TWM_HORZ node
-        twm_node *to_add = construct_leaf_twm_node(t->focus->item, t->focus->draw_ops);
-        if (to_add == NULL) {
-            t->error_str = TWM_OOM;
-            return -1;
-        }
-        
-        t->focus->type = type;
-        t->focus->num_children = 1;
-        t->focus->children[0] = to_add;
-        
+            
         //Make sure to trigger redraw
         int rc = redraw_twm_node_tree(t->focus);
         if (rc < 0) {
@@ -1381,24 +1425,12 @@ int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type) {
         //Success
         t->error_str = TWM_SUCC;
         return 0;
-    }
-    
-    twm_node *to_toggle = t->focus;
-    //If the user was focused on a non-leaf node, we will toggle that node's
-    //stack direction. Otherwise, we will toggle its parent's stack direction
-    
-    if (t->focus->type == TWM_LEAF) to_toggle = parent;
-    
-    if (to_toggle->type == TWM_LEAF) {
-        //A leaf node cannot be toggled. This is bad!
-        t->error_str = TWM_INVALID_TREE;
-        return -1;
-    } else if (to_toggle->type != type) {
-        to_toggle->type = type;
-        int rc = redraw_twm_node_tree(to_toggle);
+    } else if (t->focus->type != type) {
+        t->focus->type = type;
+        int rc = redraw_twm_node_tree(t->focus);
         if (rc < 0) {
             //Propagate error
-            t->error_str = to_toggle->error_str;
+            t->error_str = t->focus->error_str;
             return -1;
         }
         
@@ -1409,6 +1441,30 @@ int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type) {
     
     //Nothing to do
     t->error_str = TWM_SUCC;
+    return 0;
+}
+
+//Togles stack direction of active focus node. Returns -1 on error and sets
+//t->error_str (or returns -2 if t was NULL)
+int twm_toggle_stack_dir_focused(twm_tree *t) {
+    if (!t) return -2;
+    
+    if (t->focus == NULL) {
+        //Nothing to do
+        return 0;
+    }
+    
+    twm_node_type type = t->focus->type;
+    if (type == TWM_VERT) {
+        return twm_set_stack_dir_focused(t, TWM_HORZ);
+    } else if (type == TWM_HORZ) {
+        return twm_set_stack_dir_focused(t, TWM_VERT);
+    } else {
+        //Let twm_set_stack_dir_focused handle the edge cases
+        return twm_set_stack_dir_focused(t, TWM_HORZ);
+    }
+    
+    t->error_str = TWM_IMPOSSIBLE;
     return -1;
 }
 

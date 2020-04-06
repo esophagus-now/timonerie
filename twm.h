@@ -139,6 +139,10 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir);
 //t->error_str (or returns -2 if t was NULL)
 int twm_set_stack_dir_focused(twm_tree *t, twm_node_type type);
 
+//Togles stack direction of active focus node. Returns -1 on error and sets
+//t->error_str (or returns -2 if t was NULL)
+int twm_toggle_stack_dir_focused(twm_tree *t);
+
 //write()s the data described by t into fd, given the target screen size
 //and coordinates. Follows usual error return technique
 int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h);
