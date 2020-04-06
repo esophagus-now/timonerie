@@ -352,7 +352,7 @@ static twm_node* construct_leaf_twm_node(void *item, draw_operations draw_ops) {
     ret->type = TWM_LEAF;
     ret->item = item;
     ret->draw_ops = draw_ops;
-    ret->num_children = 1; //Maybe this will come in handy?
+    ret->num_children = 0; //Maybe this will come in handy? 
     
     ret->error_str = TWM_SUCC;
     return ret;
@@ -737,10 +737,14 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
         parent->type = tmp->type;
         parent->item = tmp->item;
         parent->draw_ops = tmp->draw_ops;
-        parent->num_children = tmp->num_children;
-        for (i = 0; i < parent->num_children; i++) {
-            parent->children[i] = tmp->children[i];
-            parent->children[i]->parent = parent; //That's a mouthful...
+        if (tmp->type != TWM_LEAF) {
+            parent->num_children = tmp->num_children;
+            for (i = 0; i < parent->num_children; i++) {
+                parent->children[i] = tmp->children[i];
+                parent->children[i]->parent = parent; //That's a mouthful...
+            }
+        } else {
+            parent->num_children = 0; //Not strictly necessary, but might help
         }
         destroy_twm_node(tmp);
         

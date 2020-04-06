@@ -894,8 +894,8 @@ int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf) 
     char *buf_saved = buf;
     
     //Clip drawing rect to stay on the screen
-    if (x + w >= term_cols) w = term_cols - x;
-    if (y + h >= term_rows) h = term_rows - y;
+    if ((x+w-1) > term_cols) w = term_cols - x; //Had a really nasty OBOE here!
+    if ((y+h-1) > term_rows) h = term_rows - y;
     
     int i;
     for (i = 0; i < h; i++) {
