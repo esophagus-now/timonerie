@@ -91,7 +91,7 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
         if (t->has_focus) {
             *buf++ = '\e'; *buf++ = '['; *buf++ = 'm'; //Restore original mode
         }
-        return buf_saved - buf;
+        return buf - buf_saved;
     } else if (t->type == TWM_HORZ) {        
         //In a perfect world, the width (minus the columns needed for drawing
         //separating borders) is an exact multiple of the number of children.
@@ -393,7 +393,7 @@ static void free_twm_node_tree(twm_node *head) {
 
 //Mark all nodes in the subtree for redraw. Returns -1 on error (and sets
 //t->error_str), or -2 if t was NULL
-static int redraw_twm_node_tree(twm_node *t) {
+/*static*/ int redraw_twm_node_tree(twm_node *t) {
     if (t == NULL) {
         return -2; //This is all we can do
     }
@@ -1423,20 +1423,29 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h) {
     
     int bytes_needed = draw_sz_twm_node(t->head, w, h);
     if (bytes_needed < 0) {
-        return -1; //t->error_str already set
+        //Propagate error string
+        t->error_str = t->head->error_str;
+        return -1;
     }
     
     char *buf = malloc(bytes_needed);
     int len = draw_fn_twm_node(t->head, x, y, w, h, buf);
     
     if (len < 0) {
+        free(buf);
+        //Propagate error string
+        t->error_str = t->head->error_str;
         return -1; //t->error_str already set
     }
     
+    //TODO: should this be in a while loop in case we can't send it all at
+    //once?
     int rc = write(fd, buf, len);
     if (rc < 0) {
         t->error_str = strerror(errno);
     }
+    
+    free(buf);
     return rc;
 }
 

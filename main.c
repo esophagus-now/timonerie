@@ -62,6 +62,7 @@ int num_poll_logs = 1000;
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
 
+twm_tree *t = NULL; //Also fix this too?
 fpga_connection_info *FIX_THIS = NULL;
 
 void got_rl_line(char *str) {
@@ -194,8 +195,28 @@ void callback(new_fpga_cb_info info) {
     dbg_guv *g = &f->guvs[0];
     dbg_guv_set_name(g, "FIZZCNT");
     
+    if (t != NULL) {
+        int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        }
+    }
+    
     dbg_guv *h = &f->guvs[1];
     dbg_guv_set_name(h, "FIZZBUZZ");
+    
+    if (t != NULL) {
+        int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        }
+    }
     
     pollfd_array *p = (pollfd_array *)info.user_data;
     int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
@@ -211,11 +232,16 @@ void callback(new_fpga_cb_info info) {
 //Don't forget: callbacks for when SIGWINCH is signalled
 
 int main(int argc, char **argv) {    
+    int rc;
     atexit(clean_screen);
     term_init();
     
     init_readline(got_rl_line);
     
+    t = new_twm_tree();
+    if (!t) {
+        return -1;
+    }
     
     //Set up thread that reads from keyboard/mouse. This will disappear soon
     //once I set up the call to poll() in the main event loop
@@ -230,6 +256,8 @@ int main(int argc, char **argv) {
     new_fpga_connection(callback, "localhost", "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
+    
+    rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
     
     //Buffer for constructing strings to write to stdout
     char line[2048];
@@ -248,8 +276,18 @@ int main(int argc, char **argv) {
     
     //Main event loop
     while(1) {
-        int rc;
         char c;     
+        
+        //redraw_twm_node_tree(t->head);
+        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 23, term_cols, 15);
+        if (rc < 0) {
+            char *errmsg = malloc(80);
+            sprintf(errmsg, "Could not draw tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, errmsg);
+            if (old != NULL) free(old);
+        } else if (rc > 0) {
+            if (mode == READLINE) place_readline_cursor();
+        }
         
         //Get network data
         //Are any fds available for reading right now?
@@ -365,28 +403,7 @@ int main(int argc, char **argv) {
                 //Put cursor in the right place
                 place_readline_cursor();
             }
-        }
-        
-        if (FIX_THIS != NULL) {
-            //Draw dbg_guvs. This is just a test; later, the user can turn 
-            //windows on and off, and we'll need a smarter loop
-            len = draw_fn_dbg_guv(&FIX_THIS->guvs[0], 1, 7, 30, 7, line);
-            if (len > 0) {
-                write(1, line, len);
-                if (mode == READLINE) {
-                    //Put cursor in the right place
-                    place_readline_cursor();
-                }
-            }
-            
-            len = draw_fn_dbg_guv(&FIX_THIS->guvs[1], 32, 7, 30, 7, line);
-            if (len > 0) {
-                write(1, line, len);
-                if (mode == READLINE) {
-                    //Put cursor in the right place
-                    place_readline_cursor();
-                }
-            }
+            err_log->need_redraw = 0;
         }
         
         //A little slow but we'll read one character at a time, guarding each

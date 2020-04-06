@@ -3,6 +3,7 @@
 
 #include <termios.h>
 #include "queue.h"
+#include "twm.h"
 
 #define ESCAPE "\x1b"
 #define CSI "\x1b["
@@ -270,6 +271,8 @@ int draw_sz_msg_win(void *item, int w, int h);
 //Tells us that we should redraw, probably because we moved to another
 //area of the screen
 void trigger_redraw_msg_win(void *item);
+
+extern draw_operations const msg_win_draw_ops;
 
 //////////////////////////////////////////////////
 //Error codes, which double as printable strings//

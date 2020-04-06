@@ -1051,7 +1051,7 @@ int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {
     }
     buf += incr;
     
-    m->need_redraw = 0;
+    //m->need_redraw = 0; //Removed for debugging
     
     return buf - buf_saved;
 }
@@ -1086,3 +1086,9 @@ void trigger_redraw_msg_win(void *item) {
     
     m->need_redraw = 1;
 }
+
+draw_operations const msg_win_draw_ops = {
+    draw_fn_msg_win,
+    draw_sz_msg_win,
+    trigger_redraw_msg_win
+};

@@ -145,4 +145,7 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h);
 
 char const* twm_tree_strerror(twm_tree *t);
 
+
+//Temporary, for debugging
+int redraw_twm_node_tree(twm_node *t);
 #endif

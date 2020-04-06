@@ -311,7 +311,7 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     status[0] = '|';
     status[1] = d->keep_pausing ? 'P' : '-';
     status[2] = d->keep_logging ? 'L' : (d->log_cnt != 0 ? 'l' : '-');
-    status[3] = d->keep_dropping ? 'D' : (d->log_cnt != 0 ? 'd' : '-');
+    status[3] = d->keep_dropping ? 'D' : (d->drop_cnt != 0 ? 'd' : '-');
     status[4] = d->inj_TVALID ? 'V' : '-';
     status[5] = '\0';
     static char const *const unknown = "|????";
@@ -370,3 +370,9 @@ void trigger_redraw_dbg_guv(void *item) {
     
     d->need_redraw = 1;
 }
+
+draw_operations const dbg_guv_draw_ops = {
+    draw_fn_dbg_guv,
+    draw_sz_dbg_guv,
+    trigger_redraw_dbg_guv
+};

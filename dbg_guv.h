@@ -131,6 +131,8 @@ int draw_sz_dbg_guv(void *item, int w, int h);
 //area of the screen
 void trigger_redraw_dbg_guv(void *item);
 
+extern draw_operations const dbg_guv_draw_ops;
+
 ///////////////////////////////////////////////////////
 //Error strings, whose pointers double as error codes//
 ///////////////////////////////////////////////////////
