@@ -149,7 +149,23 @@ void *word_writer (void *arg) {
     pthread_exit(NULL);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    //Check command line args
+    if (argc != 2) {
+        fprintf(stderr, "Usage: fake_dbg_guv GUV_ADDR\n");
+        return -1;
+    }
+    
+    unsigned guv_addr = 0;
+    int rc = sscanf(argv[1], "%u", &guv_addr);
+    if (rc < 1) {
+        fprintf(stderr, "Could not parse dbg_guv address [%s]\n", argv[1]);
+        return -1;
+    } else if (guv_addr > 15) {
+        fprintf(stderr, "dbg_guv address [%u] is out of range\n", guv_addr);
+        return -1;
+    }
+    
     //Try to make sure that the right file redirects were used
     if (!fd_is_valid(3) || !fd_is_valid(4)) {
         fprintf(stderr, "Please redirect pipe output to file 3 and file 4 to pipe input\n");
@@ -323,7 +339,32 @@ int main() {
                 !d.keep_pausing
             ;
             
-            
+            if (ready_for_input) {
+                if (copy_to_out) {
+                    pthread_mutex_lock(&out_args);
+                    out_args.to_send = input_val;
+                    out_args.vld = 1;
+                    pthread_mutex_unlock(&out_args);
+                } else {
+                    if (d.drop_cnt > 0) d.drop_cnt--;
+                }
+                
+                if (copy_to_log) {
+                    //Send log header
+                    //TODO: BUILD HEADER
+                    pthread_mutex_lock(&log_args);
+                    log_args.to_send = guv_addr; //Good enough for simple testing
+                    log_args.vld = 1;
+                    log_args.val_sent = 0;
+                    pthread_mutex_unlock(&log_args);
+                    
+                    //Queue up second flit, and mark it as log
+                    d.in_log_packet = 1;
+                    d.log_data = input_val;
+                    d.is_receipt = 0;
+                }
+                input_buf_pos = 0;
+            }
             
         }
         
