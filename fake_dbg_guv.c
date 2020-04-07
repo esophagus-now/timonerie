@@ -1,3 +1,6 @@
+//Need this #define to use pthread_setname_np
+#define _GNU_SOURCE 
+
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
@@ -55,15 +58,10 @@ typedef struct _fake_dbg_guv {
     unsigned inj_TID_r;
     unsigned dut_reset_r;
     
-    unsigned cmd_receipt_hdr;
-    unsigned cmd_receipt_hdr_sent;
-    unsigned cmd_receipt_tdata;
-    unsigned cmd_receipt_tvalid;
-    
-    unsigned log_hdr;
-    unsigned log_hdr_sent;
+    //emulate dbg_guv log behaviour
+    unsigned in_log_packet;
     unsigned log_data;
-    unsigned log_data_sent;
+    unsigned is_receipt;
 } fake_dbg_guv;
 
 //from https://stackoverflow.com/questions/12340695/how-to-check-if-a-given-file-descriptor-stored-in-a-variable-is-still-valid
@@ -80,11 +78,13 @@ char const *const SUCC = "succ";
 char const *const WRITE_ERROR = "write error";
 char const *const STOP_SIG = "stop was signaled";
 
+//Once a value is written into to_send, it is considered sent (even if it is
+//hasn't actually been sent out to the write system call)
 typedef struct {
     int fd;
     unsigned to_send;
     unsigned vld;
-    unsigned val_sent;
+    unsigned val_sent; //Only used by log_out
     unsigned stop;
     char const *error_str;
     pthread_mutex_t mutex;
@@ -97,7 +97,7 @@ void *word_writer (void *arg) {
         unsigned local_copy;
         int fd;
         
-        pthread_mutex_lock(&arg->mutex);
+        pthread_mutex_lock(&args->mutex);
         //Save the value that the user is trying to send
         local_copy = args->to_send;
         fd = args->fd;
@@ -106,18 +106,18 @@ void *word_writer (void *arg) {
         if (args->stop) {
             args->error_str = STOP_SIG;
             args->stop = 1;
-            pthread_mutex_unlock(&arg->mutex);
+            pthread_mutex_unlock(&args->mutex);
             break;
         }
         
         //Is there anything to send?
         if (!args->vld) {
             //Nothing to send
-            pthread_mutex_unlock(&arg->mutex);
+            pthread_mutex_unlock(&args->mutex);
             sched_yield();
             continue;
         }
-        pthread_mutex_unlock(&arg->mutex);
+        pthread_mutex_unlock(&args->mutex);
         
         //At this point, there is something to send. Issue the write() call
         int num_written = 0;
@@ -132,17 +132,17 @@ void *word_writer (void *arg) {
         //Check for write error and set values
         if (rc < 0) {
             char *err = strerror(errno);
-            pthread_mutex_lock(&arg->mutex);
+            pthread_mutex_lock(&args->mutex);
             args->error_str = err;
             args->stop = 1;
-            pthread_mutex_unlock(&arg->mutex);
+            pthread_mutex_unlock(&args->mutex);
             break;
         } else {
-            pthread_mutex_lock(&arg->mutex);
+            pthread_mutex_lock(&args->mutex);
             args->error_str = SUCC;
             args->vld = 0;
             args->val_sent = 1;
-            pthread_mutex_unlock(&arg->mutex);
+            pthread_mutex_unlock(&args->mutex);
         }
     }
     
@@ -161,7 +161,7 @@ int main() {
     memset(&d, 0, sizeof(d));
     
     //Hook up SIGPIPE handler to stop this program
-    sigaction sa = {
+    struct sigaction sa = {
         .sa_handler = sigpipe_handler,
         .sa_flags = 0
     };
@@ -179,6 +179,7 @@ int main() {
     egress_args log_args = {
         .fd = 4,
         .vld = 0,
+        .val_sent = 0,
         .stop = 0,
         .error_str = SUCC,
         .mutex = PTHREAD_MUTEX_INITIALIZER
@@ -189,8 +190,15 @@ int main() {
     pthread_create(&log_tid, NULL, word_writer, &log_args);
     pthread_setname_np(log_tid, "dbg_guv log");
     
+    //When we get a latch signal, we need to save the receipt hdr and data
+    //in case the log is not currently ready
+    unsigned receipt_hdr;
+    unsigned receipt_data;
+    unsigned receipt_vld = 0;
+    
     while (!stop) {
         int output_ready = 0;
+        int log_ready = 0;
         
         //Check up on output thread
         pthread_mutex_lock(&out_args.mutex);
@@ -199,22 +207,72 @@ int main() {
             pthread_mutex_unlock(&out_args.mutex);
             break;
         }
-        if (out_args.val_sent) {
-            //If an inject was sent, return inj_TVALID to 0
-            d.inj_TVALID = 0;
-        }
         if (!out_args.vld) {
-            //See if there is anything available to write
+            //See if there is an inject available to write
             if (d.inj_TVALID) {
                 out_args.to_send = d.inj_TDATA;
                 out_args.vld = 1;
+                d.inj_TVALID = 0;
             } else {
                 //Later we'll check if anyone is trying to write to the 
-                //output, depending on pause/log/drop/inject flags
+                //output, depending on pause/log/drop flags
                 output_ready = 1;
             }
         }
+        pthread_mutex_unlock(&out_args.mutex);
         
+        //Check up on log thread
+        pthread_mutex_lock(&log_args.mutex);
+        if (log_args.stop) {
+            fprintf(stderr, "Log thread stopped early: %s\n", log_args.error_str);
+            pthread_mutex_unlock(&log_args.mutex);
+            break;
+        }
+        if (log_args.val_sent) {
+            //If a log was sent, decrement log_cnt
+            if (!d.is_receipt && !d.in_log_packet) {
+                if (d.log_cnt > 0) d.log_cnt--;
+            }
+            log_args.val_sent = 0;
+        }
+        if (!log_args.vld) {
+            //Check if there is a log in progress; if so, queue up the next
+            //flit
+            if (d.in_log_packet) {
+                log_args.to_send = d.log_data;
+                log_args.vld = 1;
+                log_args.val_sent = 0; //Unnecessary, but added for clarity (it's set by the if on line 220)
+                d.in_log_packet = 0;
+            } 
+            //Check if there is a command receipt waiting
+            else if (receipt_vld) {
+                //Send receipt hdr to logger
+                log_args.to_send = receipt_hdr;
+                log_args.vld = 1;
+                log_args.val_sent = 0;
+                
+                //Queue up second flit, and mark it as command receipt
+                d.log_data = receipt_data;
+                d.in_log_packet = 1;
+                d.is_receipt = 1;
+                
+                //We can mark our "receipt registers" as free
+                receipt_vld = 0;
+            }
+            else {
+                //Later we'll check if anyone is trying to write to the 
+                //log, depending on pause/log/drop flags and cmd receipts
+                log_ready = 1;
+            }
+        }
+        pthread_mutex_unlock(&log_args.mutex);
+        
+        //Look at pause/drop/log/flags to figure out if we should read from
+        //the input
+        
+        
+        
+        //Read a command input
     }
     
     //Try to properly close out the threads
