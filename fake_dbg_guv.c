@@ -85,6 +85,11 @@ typedef struct {
     int fd;
     unsigned to_send;
     unsigned vld;
+    
+    //I told myself I would be okay with ugly hacks, so here is one:
+    unsigned extra_val;
+    unsigned extra_vld;
+    
     unsigned val_sent; //Only used by log_out
     unsigned stop;
     char const *error_str;
@@ -98,10 +103,19 @@ void *word_writer (void *arg) {
         unsigned local_copy;
         int fd;
         
+        
+        //I told myself I would be okay with ugly hacks, so here is one:
+        unsigned extra_local_copy;
+        unsigned extra_vld_copy;
+        
         pthread_mutex_lock(&args->mutex);
-        //Save the value that the user is trying to send
+        //Save the value(s) that the user is trying to send
         local_copy = args->to_send;
         fd = args->fd;
+        
+        //I told myself I would be okay with ugly hacks, so here is one:
+        extra_local_copy = args->extra_val;
+        extra_vld_copy = args->extra_vld;
         
         //Check if we should stop
         if (args->stop) {
@@ -122,17 +136,33 @@ void *word_writer (void *arg) {
         
         //At this point, there is something to send. Issue the write() call
         int num_written = 0;
+        int saved_errno;
         int rc;
         //For extra safety, write this write in a loop. Probably unnecessary
         //since we're no longer living in the 1960s
         while (num_written < sizeof(local_copy)) {
             rc = write(fd, ((char*)(&local_copy)) + num_written, sizeof(local_copy) - num_written);
+            saved_errno = errno;
             if (rc <= 0) break;
+        }
+        
+        int extra_rc;
+        int extra_saved_errno;
+        //I told myself I would be okay with ugly hacks, so here is one:
+        if (extra_vld_copy) {
+            int extra_num_written = 0;
+            //For extra safety, write this write in a loop. Probably unnecessary
+            //since we're no longer living in the 1960s
+            while (extra_num_written < sizeof(local_copy)) {
+                extra_rc = write(fd, ((char*)(&extra_local_copy)) + extra_num_written, sizeof(extra_local_copy) - extra_num_written);
+                extra_saved_errno = errno;
+                if (extra_rc <= 0) break;
+            }
         }
         
         //Check for write error and set values
         if (rc < 0) {
-            char *err = strerror(errno);
+            char const *err = strerror(saved_errno);
             pthread_mutex_lock(&args->mutex);
             args->error_str = err;
             args->stop = 1;
@@ -145,18 +175,36 @@ void *word_writer (void *arg) {
             args->val_sent = 1;
             pthread_mutex_unlock(&args->mutex);
         }
+        
+        //I told myself I would be okay with ugly hacks, so here is one:
+        if (extra_rc < 0) {
+            char const *err = strerror(extra_saved_errno);
+            pthread_mutex_lock(&args->mutex);
+            args->error_str = err;
+            args->stop = 1;
+            pthread_mutex_unlock(&args->mutex);
+            break;
+        } else {
+            pthread_mutex_lock(&args->mutex);
+            args->error_str = SUCC;
+            args->extra_vld = 0;
+            pthread_mutex_unlock(&args->mutex);
+        }
     }
     
     pthread_exit(NULL);
 }
 
+
+
 int main(int argc, char **argv) {
     //Check command line args
-    if (argc != 2) {
-        fprintf(stderr, "Usage: fake_dbg_guv GUV_ADDR\n");
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "Usage: fake_dbg_guv GUV_ADDR CMD_IN_PIPE LOG_OUT_PIPE [CMD_OUT_PIPE]\n");
         return -1;
     }
     
+    //Parse guv address
     unsigned guv_addr = 0;
     int rc = sscanf(argv[1], "%u", &guv_addr);
     if (rc < 1) {
@@ -167,12 +215,37 @@ int main(int argc, char **argv) {
         return -1;
     }
     
-    //Try to make sure that the right file redirects were used
-    if (!fd_is_valid(3) || !fd_is_valid(4)) {
-        fprintf(stderr, "Please redirect pipe output to file 3 and file 4 to pipe input\n");
-        fflush(stderr);
+    //Try opening the named pipes
+    int cmd_in_fd = open(argv[2], O_RDONLY);
+    if (cmd_in_fd < 0) {
+        char line[80];
+        sprintf(line, "Could not open command input pipe [%32s]", argv[2]);
+        perror(line);
         return -1;
     }
+    
+    int log_out_fd = open(argv[3], O_WRONLY);
+    if (log_out_fd < 0) {
+        char line[80];
+        sprintf(line, "Could not open log output pipe [%32s]", argv[3]);
+        perror(line);
+        close(cmd_in_fd);
+        return -1;
+    }
+    
+    int cmd_out_fd = -1;
+    if (argc == 5) {
+        cmd_out_fd = open(argv[4], O_WRONLY);
+        if (log_out_fd < 0) {
+            char line[80];
+            sprintf(line, "Could not open command output pipe [%32s]", argv[4]);
+            perror(line);
+            close(cmd_in_fd);
+            close(log_out_fd);
+            return -1;
+        }
+    }
+
     
     fake_dbg_guv d;
     memset(&d, 0, sizeof(d));
@@ -185,7 +258,7 @@ int main(int argc, char **argv) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGPIPE, &sa, NULL);
     
-    pthread_t out_tid, log_tid;
+    pthread_t out_tid, log_tid, cmd_out_tid;
     egress_args out_args = {
         .fd = STDOUT_FILENO,
         .vld = 0,
@@ -194,7 +267,15 @@ int main(int argc, char **argv) {
         .mutex = PTHREAD_MUTEX_INITIALIZER
     };
     egress_args log_args = {
-        .fd = 4,
+        .fd = log_out_fd,
+        .vld = 0,
+        .val_sent = 0,
+        .stop = 0,
+        .error_str = SUCC,
+        .mutex = PTHREAD_MUTEX_INITIALIZER
+    };
+    egress_args cmd_out_args = {
+        .fd = cmd_out_fd,
         .vld = 0,
         .val_sent = 0,
         .stop = 0,
@@ -206,6 +287,10 @@ int main(int argc, char **argv) {
     pthread_setname_np(out_tid, "dbg_guv out");
     pthread_create(&log_tid, NULL, word_writer, &log_args);
     pthread_setname_np(log_tid, "dbg_guv log");
+    if (cmd_out_fd != -1) {
+        pthread_create(&cmd_out_tid, NULL, word_writer, &cmd_out_args);
+        pthread_setname_np(cmd_out_tid, "dbg_guv cmd_out");
+    }
     
     //When we get a latch signal, we need to save the receipt hdr and data
     //in case the log is not currently ready
@@ -423,6 +508,18 @@ int main(int argc, char **argv) {
             
             //If this message is not for us, we don't have to do anything
             if (targeted_guv != guv_addr) {
+                if (cmd_out_fd != -1) {
+                    //If the user daisy-chained the command output
+                    pthread_mutex_lock(&cmd_out_args.mutex);
+                    //We just overwrite the old command.
+                    //I said I would be okay with ugly hacks...
+                    cmd_out_args.to_send = cmd_addr_raw;
+                    cmd_out_args.vld = 1;
+                    cmd_out_args.extra_val = cmd_val;
+                    cmd_out_args.extra_vld = 1;
+                    pthread_mutex_unlock(&cmd_out_args.mutex);
+                }
+                
                 sched_yield(); //Not sure if this is really needed, but whatever
                 continue;
             }
@@ -517,6 +614,10 @@ int main(int argc, char **argv) {
     
     pthread_join(out_tid, NULL);
     pthread_join(log_tid, NULL);
+    
+    if (cmd_in_fd != -1) close(cmd_in_fd);
+    if (log_out_fd != -1) close(log_out_fd);
+    if (cmd_out_fd != -1) close(cmd_out_fd);
     
     return 0;
 }
