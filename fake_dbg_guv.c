@@ -246,7 +246,7 @@ int main() {
             } 
             //Check if there is a command receipt waiting
             else if (receipt_vld) {
-                //Send receipt hdr to logger
+                //Send receipt header to log output
                 log_args.to_send = receipt_hdr;
                 log_args.vld = 1;
                 log_args.val_sent = 0;
@@ -258,14 +258,37 @@ int main() {
                 
                 //We can mark our "receipt registers" as free
                 receipt_vld = 0;
-            }
-            else {
+            } else {
                 //Later we'll check if anyone is trying to write to the 
-                //log, depending on pause/log/drop flags and cmd receipts
+                //log, depending on pause/log/drop flags
                 log_ready = 1;
             }
         }
         pthread_mutex_unlock(&log_args.mutex);
+        
+        //See if there is any input ready
+        int input_valid = 0;
+        
+        struct pollfd can_read_input = {
+            .fd = STDIN_FILENO,
+            .events = POLLIN | POLLHUP
+        };
+        
+        int rc = poll(&can_read_input, 1, 0);
+        if (rc < 0) {
+            perror("Could not issue poll call");
+            break;
+        } else if (rc == 0) {
+            //Timeout
+            input_valid = 0;
+        } else {
+            if (can_read_input.revents & POLLHUP) {
+                fprintf(stderr, "Input pipe disconnected\n");
+                break;
+            } else if (can_read_input.revents & POLLIN) {
+                input_valid = 1;
+            }
+        }
         
         //Look at pause/drop/log/flags to figure out if we should read from
         //the input
@@ -273,6 +296,8 @@ int main() {
         
         
         //Read a command input
+        
+        //If latch command, overwrite receipt registers
     }
     
     //Try to properly close out the threads
