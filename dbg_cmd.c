@@ -1,6 +1,8 @@
 #include <stdlib.h> //For strtoul
 #include <ctype.h> //For isspace
 #include <limits.h> //For UINT_MAX
+#include <stdio.h> //sscanf, which is not in string.h for some reason
+#include <string.h>
 #include "dbg_guv.h" //For MAX_GUVS_PER_FPGA
 #include "dbg_cmd.h"
 
@@ -303,6 +305,16 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
         dest->error_str = DBG_CMD_NULL_PTR;
         return -1;
     } 
+    
+    
+    //Check which command this is
+    char cmd[16];
+    sscanf(str, "%15s", cmd);
+    //For now, check for special dummy command
+    if (!strcmp(cmd, "dummy")) {
+        dest->type = DUMMY;
+        return 0;
+    }
     
     int rc = parse_dbg_guv_addr(dest, str);
     if (rc < 0) return -1; //parse_dbg_guv_addr already set dest->error_str

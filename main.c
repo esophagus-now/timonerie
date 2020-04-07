@@ -55,6 +55,65 @@ void* producer(void *v) {
     return NULL;
 }
 
+typedef struct _dummy {
+    int need_redraw;
+    int colour;
+    struct _dummy *next;
+} dummy;
+
+dummy *dummy_head = NULL;
+
+static int dummy_col = 40;
+
+int draw_fn_dummy(void *item, int x, int y, int w, int h, char *buf) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return -1;
+    
+    if (!d->need_redraw) return 0;
+    
+    char *buf_saved = buf;
+    
+    int incr;
+    sprintf(buf, "\e[%dm%n", d->colour, &incr);
+    buf += incr;
+    
+    int i;
+    for (i = y; i < y+h; i++) {
+        incr = cursor_pos_cmd(buf, x, i);
+        buf += incr;
+        int j;
+        for (j = 0; j < w; j++) *buf++ = '*';
+    }
+    
+    sprintf(buf, "\e[49m%n", &incr);
+    buf += incr;
+    
+    d->need_redraw = 0;
+    
+    return buf - buf_saved;
+}
+
+int draw_sz_dummy(void *item, int w, int h) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return -1;
+    
+    if (!d->need_redraw) return 0;
+    
+    return 10 + h*(10 + w);
+}
+
+void trigger_redraw_dummy(void *item) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return;
+    
+    d->need_redraw = 1;
+}
+
+draw_operations const dummy_ops = {
+    draw_fn_dummy,
+    draw_sz_dummy,
+    trigger_redraw_dummy
+};
 
 #ifdef DEBUG_ON
 int num_poll_logs = 1000;
@@ -84,7 +143,22 @@ void got_rl_line(char *str) {
             sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
             write(1, line, len);
             return;
-        } else if (f == NULL) {
+        }
+        
+        add_history(str);
+        
+        if (cmd.type == DUMMY) {
+            dummy *d = malloc(sizeof(dummy));
+            d->colour = dummy_col++;
+            if (dummy_col == 47) dummy_col = 40;
+            d->need_redraw = 1;
+            d->next = dummy_head;
+            dummy_head = d;
+            twm_tree_add_window(t, d, dummy_ops);
+            return;
+        }
+        
+        if (f == NULL) {
             cursor_pos(1, term_rows-1);
             sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", &len);
             write(1, line, len);
@@ -111,7 +185,6 @@ void got_rl_line(char *str) {
             write(1, line, len);
         }
         
-        add_history(str);
         dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
         //Seems silly to do yet another switch statement after the one in
         //parse_dbg_cmd... but anyway, it decouples the two bits of code
@@ -658,6 +731,13 @@ int main(int argc, char **argv) {
         }
         
         sched_yield();
+    }
+    
+    dummy *cur = dummy_head;
+    while (cur) {
+        dummy *next = cur->next;
+        free(cur);
+        cur = next;
     }
     
     free_msg_win_logs(err_log);
