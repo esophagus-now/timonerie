@@ -38,6 +38,10 @@ typedef struct _dbg_guv {
     unsigned inj_TID;
     unsigned dut_reset;
     
+    //Additional information from command receipt
+    unsigned inj_failed;
+    unsigned dout_not_rdy_cnt;
+    
     //Address information for this dbg_guv
     struct _fpga_connection_info *parent;
     int addr; 
@@ -69,6 +73,9 @@ typedef struct _fpga_connection_info {
     //commands to the FPGA
     pthread_t net_tx;
     int net_tx_started;
+    
+    //Error information
+    char const* error_str;
 } fpga_connection_info;
 
 typedef struct _new_fpga_cb_info {
@@ -115,6 +122,9 @@ void del_fpga_connection(fpga_connection_info *f);
 //make an internal copy of the string; you must copy it yourself if this is
 //desired
 char *append_log(fpga_connection_info *f, int addr, char *log);
+
+//TODO: runtime sizes for the stream?
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog);
 
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed

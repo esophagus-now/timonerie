@@ -9,48 +9,6 @@
 #include "textio.h"
 #include "twm.h"
 
-#ifdef DEBUG_ON
-#define TOO_FEW_CHILDREN 1
-#define TREE_CORRUPTED 2
-//Returns a bitmap of all failed invariants
-static int check_tree_invariants(twm_node *t) {
-    if (t == NULL) {
-        //An empty tree is considered valid
-        return 0;
-    }
-    
-    if (t->type == TWM_LEAF) {
-        return 0;
-    } else {
-        int rc = 0;
-        if (t->num_children < 2) {
-            rc |= TOO_FEW_CHILDREN;
-        }
-        
-        if (t->num_children < 0 || t->num_children >= MAX_CHILDREN) {
-            rc |= TREE_CORRUPTED;
-            return rc;
-        }
-        
-        int i;
-        for (i = 0; i < t->num_children; i++) {
-            twm_node *child = t->children[i];
-            if (child == NULL) {
-                rc |= TREE_CORRUPTED;
-                continue;
-            }
-            
-            rc |= check_tree_invariants(child);
-        }
-        
-        return rc;
-    }
-    
-    return TREE_CORRUPTED;
-}
-
-#endif
-
 //Here's the key idea: twm nodes also know how to draw themselves
 int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
     twm_node *t = (twm_node *)item;
@@ -72,9 +30,15 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
     
     //Draw this node
     char *buf_saved = buf; //Keep track of original position so we can calculate size
+    
+    //Unfortunately, at this point, we don't know yet if any children will
+    //want to draw themselves. So, we pre-emptively add the command to turn
+    //on highlighting if we are the focused node...
     if (t->has_focus) {
         *buf++ = '\e'; *buf++ = '['; *buf++ = '1'; *buf++ = 'm'; //Turn on highlight mode
     }
+    //...and the technique will be to "undo" that if nothing was drawn.
+    int child_drawn = 0;
     if (t->type == TWM_LEAF) {
         //Check if a proper draw fn is given
         if (t->draw_ops.draw_fn == NULL) {
@@ -85,8 +49,18 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
         int child_sz = t->draw_ops.draw_fn(t->item, x, y, w, h, buf);
         if (child_sz < 0) {
             t->error_str = TWM_LEAF_DRAW_ERR;
+        } else if (child_sz > 0) {
+            child_drawn = 1;
         }
         buf += child_sz;
+        
+        if (!child_drawn) {
+            //Nothing to add, return early. This fixes a major performance
+            //bug where we were always sending commands to turn highlighting
+            //on and back off, even without drawing children
+            t->error_str = TWM_SUCC;
+            return 0;
+        }
         
         if (t->has_focus) {
             *buf++ = '\e'; *buf++ = '['; *buf++ = 'm'; //Restore original mode
@@ -120,6 +94,8 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
                 //Propagate error upwards
                 t->error_str = t->children[i]->error_str;
                 return child_sz;
+            } else if (child_sz > 0) {
+                child_drawn = 1;
             }
             buf += child_sz;
             err += rem;
@@ -140,6 +116,14 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
                 }
             }
             child_x++; //Advance past border line
+        }
+        
+        if (!child_drawn && !t->need_redraw) {
+            //Nothing to add, return early. This fixes a major performance
+            //bug where we were always sending commands to turn highlighting
+            //on and back off, even without drawing children
+            t->error_str = TWM_SUCC;
+            return 0;
         }
         
         if (t->has_focus) {
@@ -178,6 +162,8 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
                 //Propagate error upwards
                 t->error_str = t->children[i]->error_str;
                 return child_sz;
+            } else if (child_sz > 0) {
+                child_drawn = 1;
             }
             buf += child_sz;
             
@@ -199,7 +185,15 @@ int draw_fn_twm_node(void *item, int x, int y, int w, int h, char *buf) {
             child_y++; //Advance past border line
         }
         
-        if (t->has_focus) {
+        if (!child_drawn && !t->need_redraw) {
+            //Nothing to add, return early. This fixes a major performance
+            //bug where we were always sending commands to turn highlighting
+            //on and back off, even without drawing children
+            t->error_str = TWM_SUCC;
+            return 0;
+        }
+        
+        if (t->has_focus && t->need_redraw) {
             *buf++ = '\e'; *buf++ = '['; *buf++ = 'm'; //Restore original mode
         }
         
@@ -227,10 +221,6 @@ int draw_sz_twm_node(void *item, int w, int h) {
     }
     
     int total_sz = 0;
-    if (t->has_focus) {
-        total_sz += 7; //Extra characters needed to turn on highlight and
-                       //ten turn it off afterwards
-    }
         
     //Calculate size
     if (t->type == TWM_LEAF) {
@@ -243,6 +233,9 @@ int draw_sz_twm_node(void *item, int w, int h) {
         int child_sz = t->draw_ops.draw_sz(t->item, w, h);
         if (child_sz < 0) {
             t->error_str = TWM_LEAF_SZ_ERR;
+        } else if (child_sz > 0 && t->has_focus) {
+            total_sz += 7; //Extra characters needed to turn on highlight and
+                           //ten turn it off afterwards
         }
         return child_sz;
     } else if (t->type == TWM_HORZ) {
@@ -258,6 +251,7 @@ int draw_sz_twm_node(void *item, int w, int h) {
         int err = rem;
         
         //Tally up size needed by all the children
+        int child_drawn = 0;
         int i;
         for (i = 0; i < t->num_children; i++) {
             int child_width = quot;
@@ -270,6 +264,8 @@ int draw_sz_twm_node(void *item, int w, int h) {
                 //Propagate error upwards
                 t->error_str = t->children[i]->error_str;
                 return child_sz;
+            } else if (child_sz > 0) {
+                child_drawn = 1;
             }
             total_sz += child_sz;
             err += rem;
@@ -287,6 +283,11 @@ int draw_sz_twm_node(void *item, int w, int h) {
         
         total_sz += (t->num_children - 1) * border_sz;
         
+        if (child_drawn && t->has_focus) {
+            total_sz += 7; //Extra characters needed to turn on highlight and
+                           //ten turn it off afterwards
+        }
+        
         t->error_str = TWM_SUCC;
         return total_sz;
     } else if (t->type == TWM_VERT) {        
@@ -302,6 +303,7 @@ int draw_sz_twm_node(void *item, int w, int h) {
         int err = rem;
         
         //Tally up size needed by all the children
+        int child_drawn = 0;
         int i;
         for (i = 0; i < t->num_children; i++) {
             int child_height = quot;
@@ -314,6 +316,8 @@ int draw_sz_twm_node(void *item, int w, int h) {
                 //Propagate error upwards
                 t->error_str = t->children[i]->error_str;
                 return child_sz;
+            } else if (child_sz > 0) {
+                child_drawn = 1;
             }
             total_sz += child_sz;
             err += rem;
@@ -329,6 +333,11 @@ int draw_sz_twm_node(void *item, int w, int h) {
         }
         
         total_sz += (t->num_children - 1) * border_sz;
+        
+        if (child_drawn && t->has_focus) {
+            total_sz += 7; //Extra characters needed to turn on highlight and
+                           //ten turn it off afterwards
+        }
         
         t->error_str = TWM_SUCC;
         return total_sz;
@@ -556,8 +565,9 @@ int twm_tree_move_focus(twm_tree *t, twm_dir dir) {
         return 0;
     }
     
-    //If we are focused on the root of the tree, we can't move the focus
-    if (t->focus->parent == NULL) {
+    //If we are focused on the root of the tree, we can only move the focus
+    //down the hierarchy
+    if (t->focus->parent == NULL && dir != TWM_CHILD) {
         t->error_str = TWM_SUCC;
         return 0;
     }
@@ -1058,8 +1068,24 @@ int twm_tree_remove_focused(twm_tree *t) {
         return 0;
     }
     
-    //Try to find a reasonable node to focus on
     twm_node *parent = t->focus->parent;
+    
+    if (parent == NULL) {
+        //Trying to delete the whole tree. Handle this easy case and return 
+        //early, but make sure that this is really the case
+        if (t->head != t->focus) {
+            t->error_str = TWM_INVALID_TREE;
+            return -1;
+        }
+        free_twm_node_tree(t->head);
+        t->head = NULL;
+        t->focus = NULL;
+        return 0;
+    }
+    
+    //Try to find a reasonable node to focus on
+    twm_node *next_focus;
+    
     int focus_ind = twm_node_indexof(t->focus, parent);
     if (focus_ind < 0) {
         //Propagate error code
@@ -1067,41 +1093,47 @@ int twm_tree_remove_focused(twm_tree *t) {
         return -1;
     }
 
-    twm_node *next_focus;
-    
-    if (parent == NULL) {
-        //This means there was only one node in the tree. Make sure that's
-        //the case, then DTRT
-        if (t->head != t->focus || t->focus->type != TWM_LEAF) {
-            t->error_str = TWM_ILLEGAL_DELETE;
+    //Ugly corner case: if this node is the only child of another node,
+    //then that other node is going to be deleted when this one is. So,
+    //we can't focus to that one.
+    if (parent->num_children == 1) {
+        twm_node *grandparent = parent->parent;
+        if (grandparent == NULL) {
+            //I don't know what this means for us, so return an error
+            t->error_str = TWM_BAD_DEVELOPER;
             return -1;
         }
         
-        destroy_twm_node(t->focus);
+        int parent_ind = twm_node_indexof(parent, grandparent);
+        if (parent_ind < 0) {
+            //Propagate error
+            t->error_str = grandparent->error_str;
+            return -1;
+        }
         
-        t->head = NULL;
-        t->focus = NULL;
-        
-        t->error_str = TWM_SUCC;
-        return 0;
+        int ind = (parent_ind + 1) % grandparent->num_children;
+        next_focus = grandparent->children[ind];
+    } else if (parent->num_children == 2) {
+        //On deletion, the other child of this node will be merged into
+        //the parent. So next_focus should just be the parent
+        next_focus = parent;
     } else {
-        if (parent->num_children < 2) {
-            t->error_str = TWM_INVALID_TREE;
-            return -1;
-        }
-        
         int ind = (focus_ind + 1) % parent->num_children;
         next_focus = parent->children[ind];
     }
     
+    //We have found a suitable node to focus on. Delete the old one
     int rc = twm_remove_node(t, parent, focus_ind);
     if (rc < 0) {
         return -1; //twm_remove_node has already set the error code
     }
     
-    destroy_twm_node(t->focus);
+    //Release resources from deleted subtree
+    free_twm_node_tree(t->focus);
     
+    //Make sure to set focus and redraw
     t->focus = next_focus;
+    t->focus->has_focus = 1;
     
     rc = redraw_twm_node_tree(parent);
     if (rc < 0) {
@@ -1179,9 +1211,6 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
             continue;
         }
         
-        //TODO: travel down hierarchy if cur->children[ind + list_dir] is
-        //not a leaf node.
-        
         //Finally! We have a case we can deal with. Move the window at 
         //t->focus to cur->chlidren[ind + list_dir], taking care to set 
         //focus, redraw, delete nodes, etc.
@@ -1197,7 +1226,7 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
                 //Find "leftmost" child
                 twm_node *parent = adjacent; 
                 while (1) {
-                    if (parent->num_children < 2) {
+                    if (parent->num_children < 1) {
                         t->error_str = TWM_INVALID_TREE;
                         return -1;
                     }
@@ -1219,7 +1248,7 @@ int twm_tree_move_focused_node(twm_tree *t, twm_dir dir) {
                 //Find "rightmost" child
                 twm_node *parent = adjacent; 
                 while (1) {
-                    if (parent->num_children < 2) {
+                    if (parent->num_children < 1) {
                         t->error_str = TWM_INVALID_TREE;
                         return -1;
                     }
@@ -1485,6 +1514,11 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h) {
         return -1;
     }
     
+    if (t->head == NULL) {
+        //This is an empty tree. For now, just do nothing
+        return 0;
+    }
+    
     int bytes_needed = draw_sz_twm_node(t->head, w, h);
     if (bytes_needed < 0) {
         //Propagate error string
@@ -1547,3 +1581,4 @@ char const *const TWM_BAD_DIR = "bad direction";
 char const *const TWM_OOM = "out of memory";
 char const *const TWM_OOB = "out of bounds";
 char const *const TWM_ILLEGAL_DELETE = "illegal node deletion";
+char const *const TWM_BAD_DEVELOPER = "Marco did not know what to do here";

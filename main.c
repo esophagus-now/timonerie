@@ -14,6 +14,7 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <poll.h>
+#include <time.h>
 #include "queue.h"
 #include "textio.h"
 #include "dbg_guv.h"
@@ -115,6 +116,8 @@ void got_rl_line(char *str) {
         //Seems silly to do yet another switch statement after the one in
         //parse_dbg_cmd... but anyway, it decouples the two bits of code
         //so it's easier for me to change it later if I have to
+        
+        //These are the only fields not updated by the command receipt
         switch (cmd.type) {
         case DROP_CNT:
             g->drop_cnt = cmd.param;
@@ -125,35 +128,11 @@ void got_rl_line(char *str) {
         case INJ_TDATA:
             g->inj_TDATA = cmd.param;
             break;
-        case INJ_TVALID:
-            g->inj_TVALID = cmd.param;
-            break;
         case INJ_TLAST:
             g->inj_TLAST = cmd.param;
             break;
-        case INJ_TKEEP:
-            g->inj_TKEEP = cmd.param;
-            break;
-        case INJ_TDEST:
-            g->inj_TDEST = cmd.param;
-            break;
-        case INJ_TID:
-            g->inj_TID = cmd.param;
-            break;
-        case KEEP_PAUSING:
-            g->keep_pausing = cmd.param;
-            break;
-        case KEEP_LOGGING:
-            g->keep_logging = cmd.param;
-            break;
-        case KEEP_DROPPING:
-            g->keep_dropping = cmd.param;
-            break;
         case DUT_RESET:
             g->dut_reset = cmd.param;
-            break;
-        case LATCH:
-            g->need_redraw = 1;
             break;
         default:
             //Just here to get rid of warning for not using everything in the enum
@@ -164,11 +143,6 @@ void got_rl_line(char *str) {
         queue_write(&f->egress, (char*) &cmd.addr, sizeof(cmd.addr));
         if (cmd.has_param)
             queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
-        
-        //Done!
-        //For now, until I have code that properly handles command receipts,
-        //just pretend that we know the values
-        g->values_unknown = 0;
     }
     
     free(str);
@@ -282,13 +256,28 @@ int main(int argc, char **argv) {
     
     int mode = NORMAL;
     
+    int num_samples = 0;
+    unsigned long sum = 0;
+    
     //Main event loop
     while(1) {
         char c;     
         
         pthread_mutex_lock(&t_mutex);
         //redraw_twm_node_tree(t->head);
+        clock_t clk = clock();
         rc = twm_draw_tree(STDOUT_FILENO, t, 1, 11, term_cols, (term_rows - 2 - 8 - 2));
+        clk = clock() - clk;
+        sum += clk;
+        num_samples++;
+        if (num_samples == 500000) {
+            char *msg = malloc(80);
+            sprintf(msg, "Average time: %lf ms", ((double) sum / 500.0) / ((double) CLOCKS_PER_SEC));
+            char *old = msg_win_append(err_log, msg);
+            if (old) free(old);
+            num_samples = 0;
+            sum = 0;
+        }
         if (rc < 0) {
             char *errmsg = malloc(80);
             sprintf(errmsg, "Could not draw tree: %s", t->error_str);
@@ -327,6 +316,8 @@ int main(int argc, char **argv) {
                     sprintf(errmsg, "A socket was unexpectedly closed");
                     char *old = msg_win_append(err_log, errmsg);
                     if (old != NULL) free(old);
+                    //Remove from pollfd_array? The traversal function needs 
+                    //to be smart...
                     continue;
                 }
                 
@@ -341,60 +332,14 @@ int main(int argc, char **argv) {
                 }
                 fpga_connection_info *f = (fpga_connection_info*)*v;
                 
-                //Try reading as many bytes as we have space for. Note: this
-                //is kind of ugly, but because we might only read part of a 
-                //message, we need to save partial messages in a buffer
-                int num_read = read(cur->fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
-                if (num_read < 0) {
-                    int saved_errno = errno;
+                rc = read_fpga_connection(f, cur->fd, 4, err_log);
+                if (rc < 0) {
                     char *errmsg = malloc(80);
-                    sprintf(errmsg, "Could not read from network: %s", strerror(saved_errno));
+                    sprintf(errmsg, "Could not handle information from FPGA: %s", f->error_str);
                     char *old = msg_win_append(err_log, errmsg);
                     if (old != NULL) free(old);
                     continue;
                 }
-                
-                //Iterate through all the complete messages in the read buffer
-                f->buf_pos += num_read;
-                
-                #ifdef DEBUG_ON
-                fprintf(stderr, "Wrote %d new bytes into (%p)->buf", num_read, f);
-                fflush(stderr);
-                #endif
-                
-                unsigned *rd_pos = (unsigned *)f->buf;
-                int msgs_left = (f->buf_pos / 8);
-                while (msgs_left --> 0) {
-                    unsigned addr = *rd_pos++;
-                    unsigned val = *rd_pos++;
-                    
-                    #ifdef DEBUG_ON
-                    fprintf(stderr, "Read msg, addr = 0x%08x, val = 0x%08x (%u)", addr, val, val);
-                    fflush(stderr);
-                    #endif
-                    
-                    addr &= 0b11111; //TODO: make this a runtime parameter
-                    if (addr >= MAX_GUVS_PER_FPGA) {
-                        //ignore this message
-                        continue;
-                    }
-                    
-                    char *log = malloc(32);
-                    sprintf(log, "0x%08x (%u)", val, val);
-                    char *old = append_log(f, addr, log);
-                    if (old != NULL) free(NULL);
-                }
-                
-                //Now the really ugly thing: take whatever partial message
-                //is left and shift it to the beginning of the buffer
-                int i;
-                int leftover_bytes = f->buf_pos % 8;
-                f->buf_pos -= leftover_bytes;
-                for (i = 0; i < leftover_bytes; i++) {
-                    f->buf[i] = f->buf[f->buf_pos++];
-                }
-                f->buf_pos = i;
-                //Cross your fingers!!!!!!!!!!!!!!!!!!
             }
             //Make sure no errors occurred while we traversed the active fds
             if (pfd_arr->error_str != PFD_ARR_SUCC) {
@@ -418,6 +363,15 @@ int main(int argc, char **argv) {
             err_log->need_redraw = 0;
         }
         
+        //Draw "status bar"
+        if (mode == NORMAL && !status_drawn) {
+            cursor_pos(1, term_rows);
+            sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
+            write(1, line, len);
+            status_drawn = 1;
+        }
+        
+        
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
         //loop
@@ -432,14 +386,6 @@ int main(int argc, char **argv) {
             break;
         }
         
-        //Draw "status bar"
-        if (mode == NORMAL && !status_drawn) {
-            cursor_pos(1, term_rows);
-            sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
-            write(1, line, len);
-            status_drawn = 1;
-        }
-            
         
         //If user pressed CTRL-D we can quit
         if (c == '\x04') {
@@ -472,6 +418,7 @@ int main(int argc, char **argv) {
             }
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
+                int len = 0;
                 switch(in.type) {
                 case TEXTIO_GETCH_PLAIN: {
                     int tmp;
@@ -507,30 +454,78 @@ int main(int argc, char **argv) {
                     switch(in.key) {
                     case TEXTIO_KEY_UP:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_UP);
+                            rc = twm_tree_move_focused_node(t, TWM_UP);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move window up: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_UP);
+                            rc = twm_tree_move_focus(t, TWM_UP);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move focus up: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         }
                         break;
                     case TEXTIO_KEY_DOWN:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_DOWN);
+                            rc = twm_tree_move_focused_node(t, TWM_DOWN);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move window down: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_DOWN);
+                            rc = twm_tree_move_focus(t, TWM_DOWN);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move focus down: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         }
                         break;
                     case TEXTIO_KEY_LEFT:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_LEFT);
+                            rc = twm_tree_move_focused_node(t, TWM_LEFT);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move window left: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_LEFT);
+                            rc = twm_tree_move_focus(t, TWM_LEFT);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move focus left: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         }
                         break;
                     case TEXTIO_KEY_RIGHT:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_RIGHT);
+                            rc = twm_tree_move_focused_node(t, TWM_RIGHT);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move window right: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_RIGHT);
+                            rc = twm_tree_move_focus(t, TWM_RIGHT);
+                            if (rc < 0) {
+                                char *errmsg = malloc(80);
+                                sprintf(errmsg, "Could not move focus right: %s", t->error_str);
+                                char *old = msg_win_append(err_log, errmsg);
+                                if (old) free(old);
+                            }
                         }
                         break;
                     default:
@@ -589,6 +584,28 @@ int main(int argc, char **argv) {
                             }
                         }
                         break;
+                    case 'a':
+                        if (mode == NORMAL) {
+                            rc = twm_tree_move_focus(t, TWM_PARENT);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not move focus up: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
+                    case 'z':
+                        if (mode == NORMAL) {
+                            rc = twm_tree_move_focus(t, TWM_CHILD);
+                            if (rc < 0) {
+                                char *error_msg = malloc(80);
+                                sprintf(error_msg, "Could not move focus down: %s", t->error_str);
+                                char *old = msg_win_append(err_log, error_msg);
+                                if (old) free(old);
+                            }
+                        }
+                        break;
                     default:
                         sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
                         break;
@@ -628,7 +645,7 @@ int main(int argc, char **argv) {
                 }
                 }
                 cursor_pos(1,1);
-                write(1, line, len);
+                if (len != 0) write(1, line, len); //Writing a length of 0 has weird effects
                 if (mode == READLINE) {
                     //Put cursor in the right place
                     place_readline_cursor();
