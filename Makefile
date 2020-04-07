@@ -4,7 +4,7 @@ main: main.c queue.h queue.c textio.h textio.c dbg_guv.h dbg_guv.c dbg_cmd.h dbg
 	gcc -g -o main -Wall -fno-diagnostics-show-caret main.c queue.c textio.c dbg_guv.c dbg_cmd.c pollfd_array.c symtab.c twm.c -lpthread -lreadline
 
 fake_dbg_guv: fake_dbg_guv.c
-	gcc -g -Wall -fno-diagnostics-show-caret fake_dbg_guv.c -lpthread
+	gcc -g -Wall -fno-diagnostics-show-caret -o fake_dbg_guv{,.c} -lpthread
 
 clean:
 	rm -rf main

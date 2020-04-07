@@ -144,6 +144,7 @@ void *word_writer (void *arg) {
             rc = write(fd, ((char*)(&local_copy)) + num_written, sizeof(local_copy) - num_written);
             saved_errno = errno;
             if (rc <= 0) break;
+            num_written += rc;
         }
         
         int extra_rc;
@@ -219,7 +220,7 @@ int main(int argc, char **argv) {
     int cmd_in_fd = open(argv[2], O_RDONLY);
     if (cmd_in_fd < 0) {
         char line[80];
-        sprintf(line, "Could not open command input pipe [%32s]", argv[2]);
+        sprintf(line, "Could not open command input pipe [%.32s]", argv[2]);
         perror(line);
         return -1;
     }
@@ -227,7 +228,7 @@ int main(int argc, char **argv) {
     int log_out_fd = open(argv[3], O_WRONLY);
     if (log_out_fd < 0) {
         char line[80];
-        sprintf(line, "Could not open log output pipe [%32s]", argv[3]);
+        sprintf(line, "Could not open log output pipe [%.32s]", argv[3]);
         perror(line);
         close(cmd_in_fd);
         return -1;
