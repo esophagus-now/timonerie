@@ -196,6 +196,13 @@ int main() {
     unsigned receipt_data;
     unsigned receipt_vld = 0;
     
+    //Ugly business because we may only read partial inputs/commands from 
+    //the read() system call
+    char input_buf[4];
+    int input_buf_pos = 0;
+    char cmd_buf[8];
+    int cmd_buf_pos = 0;
+    
     while (!stop) {
         int output_ready = 0;
         int log_ready = 0;
@@ -267,32 +274,58 @@ int main() {
         pthread_mutex_unlock(&log_args.mutex);
         
         //See if there is any input ready
-        int input_valid = 0;
+        int input_valid;
         
-        struct pollfd can_read_input = {
-            .fd = STDIN_FILENO,
-            .events = POLLIN | POLLHUP
-        };
-        
-        int rc = poll(&can_read_input, 1, 0);
-        if (rc < 0) {
-            perror("Could not issue poll call");
-            break;
-        } else if (rc == 0) {
-            //Timeout
-            input_valid = 0;
+        if (input_buf_pos == 4) {
+            input_valid = 1;
         } else {
-            if (can_read_input.revents & POLLHUP) {
-                fprintf(stderr, "Input pipe disconnected\n");
+            //Need to read more bytes
+            struct pollfd can_read_input = {
+                .fd = STDIN_FILENO,
+                .events = POLLIN | POLLHUP
+            };
+            
+            int rc = poll(&can_read_input, 1, 0);
+            if (rc < 0) {
+                perror("Could not issue poll call");
                 break;
-            } else if (can_read_input.revents & POLLIN) {
-                input_valid = 1;
+            } else if (rc == 0) {
+                //Timeout
+                input_valid = 0;
+            } else {
+                if (can_read_input.revents & POLLHUP) {
+                    fprintf(stderr, "Input pipe disconnected\n");
+                    break;
+                } else if (can_read_input.revents & POLLIN) {
+                    int rc = read(STDIN_FILENO, input_buf + input_buf_pos, 4 - input_buf_pos);
+                    if (rc < 0) {
+                        perror("Could not read from input");
+                        break;
+                    }
+                    
+                    input_buf_pos += rc;
+                    input_valid = (input_buf_pos == 4);
+                }
             }
         }
         
         //Look at pause/drop/log/flags to figure out if we should read from
         //the input
-        
+        if (input_valid) {
+            unsigned input_val = *(unsigned*)input_buf;
+            
+            int copy_to_log = (d.log_cnt > 0 || d.keep_logging);
+            int copy_to_out = (d.log_cnt == 0 && d.keep_dropping == 0);
+            
+            int ready_for_input = 
+                (!copy_to_out || output_ready) &&
+                (!copy_to_log || log_ready) &&
+                !d.keep_pausing
+            ;
+            
+            
+            
+        }
         
         
         //Read a command input
