@@ -56,7 +56,7 @@ void del_pollfd_array(pollfd_array *p) {
 }
 
 //Returns 0 on success, else -1 and sets p->error_str
-static int make_space_for_one_more(pollfd_array *p) {
+static int space_for_one_more(pollfd_array *p) {
     if (p->num < p->cap) return 0;
     
     struct pollfd *res = realloc(p->pfds, p->cap * 2 * sizeof(struct pollfd));
@@ -94,7 +94,7 @@ int pollfd_array_append(pollfd_array *p, int fd, unsigned events, void *user_dat
     }
     
     //If we got here, it's because fd is not in the list
-    int rc = make_space_for_one_more(p);
+    int rc = space_for_one_more(p);
     if (rc < 0) {
         return -1; //make_space_for_one_more already set error_str
     }

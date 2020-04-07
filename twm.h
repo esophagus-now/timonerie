@@ -25,6 +25,7 @@ extern char const *const TWM_BAD_DIR; // = "bad direction";
 extern char const *const TWM_OOM; // = "out of memory";
 extern char const *const TWM_OOB; // = "out of bounds";
 extern char const *const TWM_ILLEGAL_DELETE; // = "bad delete (whole tree deletion is disabled)";
+extern char const *const TWM_BAD_DEVELOPER; // = "Marco did not know what to do here";
 
 //Draws item. Returns number of bytes added into buf, or -1 on error.
 typedef int draw_fn_t(void *item, int x, int y, int w, int h, char *buf);
@@ -80,9 +81,8 @@ typedef struct _twm_node {
     char const *error_str;
 } twm_node;
 
-//Invariant maintained by the functions in this library: no non-leaf node 
-//has one or zero children. Also, I guess another invariant is that all 
-//the pointers and number of children are in a valid range.
+//Invariant maintained by the functions in this library: if a node has a 
+//single child, then that single child is a leaf.
 typedef struct _twm_tree {
     twm_node *head;
     twm_node *focus; //Points to the window that the user is "focused" on

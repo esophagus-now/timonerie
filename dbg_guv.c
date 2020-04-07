@@ -286,6 +286,79 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
     return ret;
 }
 
+//TODO: runtime sizes for the stream?
+//TODO: remove err_win as arugment (which is just there for debuuging)
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog) {
+    if (f == NULL) {
+        return -2; //This is all we can do
+    }
+    //Read from fd into local buffer
+    
+    //Try reading as many bytes as we have space for. Note: this
+    //is kind of ugly, but because we might only read part of a 
+    //message, we need to save partial messages in a buffer
+    int num_read = read(fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
+    if (num_read < 0) {
+        f->error_str = strerror(errno);
+        return -1;
+    }
+    f->buf_pos += num_read;
+    
+    //For each complete command in the buffer, dispatch to correct guv
+    
+    unsigned *rd_pos = (unsigned *)f->buf;
+    int msgs_left = (f->buf_pos / 8); //TODO: runtime size
+    
+    //Iterate through all the complete messages in the read buffer
+    while (msgs_left --> 0) {
+        unsigned addr = *rd_pos++;
+        unsigned val = *rd_pos++;
+        
+        int dbg_guv_addr = addr & ((1 << addr_w) - 1);
+        int is_receipt = (addr >> addr_w) & 1;
+        
+        if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
+            //ignore this message
+            continue;
+        }
+        
+        //TODO: pipe output handling
+        if (is_receipt) {
+            dbg_guv *d = f->guvs + dbg_guv_addr;
+            d->keep_pausing = val & 1;
+            d->keep_logging = (val>>1) & 1;
+            d->keep_dropping = (val>>2) & 1;
+            if (d->log_cnt == 0) d->log_cnt = (val>>3) & 1;
+            if (d->drop_cnt == 0) d->drop_cnt = (val>>4) & 1;
+            d->inj_TVALID = (val>>5) & 1;
+            d->dut_reset = (val>>6) & 1;
+            d->inj_failed = (val>>7) & 1;
+            d->dout_not_rdy_cnt = (val>>8);
+            d->values_unknown = 0;
+            d->need_redraw = 1;
+        } else {
+            //Write a log to a dbg_guv
+            char *log = malloc(32);
+            sprintf(log, "0x%08x (%u)", val, val);
+            char *old = append_log(f, dbg_guv_addr, log);
+            if (old != NULL) free(NULL);
+            //TODO: pipe output handling
+        }
+    }
+    
+    //Now the really ugly thing: take whatever partial message
+    //is left and shift it to the beginning of the buffer
+    int i;
+    int leftover_bytes = f->buf_pos % 8; //TODO: runtime size
+    f->buf_pos -= leftover_bytes;
+    for (i = 0; i < leftover_bytes; i++) {
+        f->buf[i] = f->buf[f->buf_pos++];
+    }
+    f->buf_pos = i;
+    
+    return 0;
+}
+
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name) {
@@ -307,19 +380,21 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     //First, turn on inverted video mode
     *buf++ = '\e'; *buf++ = '['; *buf++ = '7'; *buf++ = 'm';
     
-    char status[6];
+    char status[8];
     status[0] = '|';
-    status[1] = d->keep_pausing ? 'P' : '-';
-    status[2] = d->keep_logging ? 'L' : (d->log_cnt != 0 ? 'l' : '-');
-    status[3] = d->keep_dropping ? 'D' : (d->drop_cnt != 0 ? 'd' : '-');
-    status[4] = d->inj_TVALID ? 'V' : '-';
-    status[5] = '\0';
-    static char const *const unknown = "|????";
+    status[1] = d->inj_failed ? 'F' : '-';
+    status[2] = '0' + d->dout_not_rdy_cnt; //Not super robust, but whatever
+    status[3] = d->keep_pausing ? 'P' : '-';
+    status[4] = d->keep_logging ? 'L' : (d->log_cnt != 0 ? 'l' : '-');
+    status[5] = d->keep_dropping ? 'D' : (d->drop_cnt != 0 ? 'd' : '-');
+    status[6] = d->inj_TVALID ? 'V' : '-';
+    status[7] = '\0';
+    static char const *const unknown = "|??????";
     
     int incr = cursor_pos_cmd(buf, x, y);
     buf += incr;
     
-    sprintf(buf, "%-*.*s%s%n", w - 5, w - 5, d->name, (d->values_unknown ? unknown : status), &incr);
+    sprintf(buf, "%-*.*s%s%n", w - 7, w - 7, d->name, (d->values_unknown ? unknown : status), &incr);
     buf += incr;
     //Turn off inverted video
     *buf++ = '\e'; *buf++ = '['; *buf++ = '2'; *buf++ = '7'; *buf++ = 'm';
