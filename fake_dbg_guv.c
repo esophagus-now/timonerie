@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
     
     unsigned guv_addr = 0;
     int rc = sscanf(argv[1], "%u", &guv_addr);
-    if (rc < 1) {
+    if (rc < 1) {
         fprintf(stderr, "Could not parse dbg_guv address [%s]\n", argv[1]);
         return -1;
     } else if (guv_addr > 15) {
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
                     //Note to self: try googling "Linux: wait for n bytes to
                     //read" and look more carefully
                     int rc = read(STDIN_FILENO, input_buf + input_buf_pos, 4 - input_buf_pos);
-                    if (rc < 0) {
+                    if (rc < 0) {
                         perror("Could not read from input");
                         break;
                     }
@@ -350,10 +350,10 @@ int main(int argc, char **argv) {
             
             if (ready_for_input) {
                 if (copy_to_out) {
-                    pthread_mutex_lock(&out_args);
+                    pthread_mutex_lock(&out_args.mutex);
                     out_args.to_send = input_val;
                     out_args.vld = 1;
-                    pthread_mutex_unlock(&out_args);
+                    pthread_mutex_unlock(&out_args.mutex);
                 } else {
                     //If we're not copying to the output, it's because we're dropping!
                     if (d.drop_cnt > 0) d.drop_cnt--;
@@ -362,11 +362,11 @@ int main(int argc, char **argv) {
                 if (copy_to_log) {
                     //Send log header
                     //TODO: BUILD HEADER
-                    pthread_mutex_lock(&log_args);
+                    pthread_mutex_lock(&log_args.mutex);
                     log_args.to_send = guv_addr; //Good enough for simple testing
                     log_args.vld = 1;
                     log_args.val_sent = 0;
-                    pthread_mutex_unlock(&log_args);
+                    pthread_mutex_unlock(&log_args.mutex);
                     
                     //Queue up second flit, and mark it as log
                     d.in_log_packet = 1;
@@ -402,7 +402,7 @@ int main(int argc, char **argv) {
                 //command (8 bytes) so we need to do this awful
                 //buffering trick. 
                 int rc = read(3, cmd_buf + cmd_buf_pos, 8 - cmd_buf_pos);
-                if (rc < 0) {
+                if (rc < 0) {
                     perror("Could not read from command stream");
                     break;
                 }
@@ -430,25 +430,25 @@ int main(int argc, char **argv) {
             switch (reg_addr) {
             //Registers currently supported by this software model
             case addr_keep_dropping:
-                d.keep_dropping_r = (val & 1); //Matches what real hardware does
+                d.keep_dropping_r = (cmd_val & 1); //Matches what real hardware does
                 break;
             case addr_drop_cnt:
-                d.drop_cnt_r = (val & 0x3FF); //Matches what real hardware does
+                d.drop_cnt_r = (cmd_val & 0x3FF); //Matches what real hardware does
                 break;
             case addr_keep_logging:
-                d.keep_logging_r = (val & 1); //Matches what real hardware does
+                d.keep_logging_r = (cmd_val & 1); //Matches what real hardware does
                 break;
             case addr_log_cnt:
-                d.log_cnt_r = (val & 0x3FF); //Matches what real hardware does
+                d.log_cnt_r = (cmd_val & 0x3FF); //Matches what real hardware does
                 break;
             case addr_keep_pausing:
-                d.keep_pausing_r = (val & 1); //Matches what real hardware does
+                d.keep_pausing_r = (cmd_val & 1); //Matches what real hardware does
                 break;
             case addr_inj_TVALID:
-                d.addr_inj_TVALID_r = (val & 1); //Matches what real hardware does
+                d.inj_TVALID_r = (cmd_val & 1); //Matches what real hardware does
                 break;
             case addr_inj_TDATA:
-                d.inj_TDATA_r = val;
+                d.inj_TDATA_r = cmd_val;
                 break;
             }
             
@@ -467,8 +467,8 @@ int main(int argc, char **argv) {
                 //Real hardware does not clobber inject values on failure,
                 //unless new inj_TVALID is 0
                 if (!inj_failed || d.inj_TVALID == 0) {
-                    d.inj_TVALID    = d.inj_TVALID
-                    d.inj_TDATA     = d.inj_TDATA
+                    d.inj_TVALID    = d.inj_TVALID_r;
+                    d.inj_TDATA     = d.inj_TDATA_r;
                 }
                 
                 //Put command receipt together. Matches my (misguided?)
