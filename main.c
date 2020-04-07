@@ -492,7 +492,7 @@ int main(int argc, char **argv) {
                         break;
                     case TEXTIO_KEY_LEFT:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_LEFT);
+                            rc = twm_tree_move_focused_node(t, TWM_LEFT);
                             if (rc < 0) {
                                 char *errmsg = malloc(80);
                                 sprintf(errmsg, "Could not move window left: %s", t->error_str);
@@ -500,7 +500,7 @@ int main(int argc, char **argv) {
                                 if (old) free(old);
                             }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_LEFT);
+                            rc = twm_tree_move_focus(t, TWM_LEFT);
                             if (rc < 0) {
                                 char *errmsg = malloc(80);
                                 sprintf(errmsg, "Could not move focus left: %s", t->error_str);
@@ -511,7 +511,7 @@ int main(int argc, char **argv) {
                         break;
                     case TEXTIO_KEY_RIGHT:
                         if (in.meta) {
-                            twm_tree_move_focused_node(t, TWM_RIGHT);
+                            rc = twm_tree_move_focused_node(t, TWM_RIGHT);
                             if (rc < 0) {
                                 char *errmsg = malloc(80);
                                 sprintf(errmsg, "Could not move window right: %s", t->error_str);
@@ -519,7 +519,7 @@ int main(int argc, char **argv) {
                                 if (old) free(old);
                             }
                         } else if (!in.shift && !in.ctrl) {
-                            twm_tree_move_focus(t, TWM_RIGHT);
+                            rc = twm_tree_move_focus(t, TWM_RIGHT);
                             if (rc < 0) {
                                 char *errmsg = malloc(80);
                                 sprintf(errmsg, "Could not move focus right: %s", t->error_str);

@@ -1068,8 +1068,24 @@ int twm_tree_remove_focused(twm_tree *t) {
         return 0;
     }
     
-    //Try to find a reasonable node to focus on
     twm_node *parent = t->focus->parent;
+    
+    if (parent == NULL) {
+        //Trying to delete the whole tree. Handle this easy case and return 
+        //early, but make sure that this is really the case
+        if (t->head != t->focus) {
+            t->error_str = TWM_INVALID_TREE;
+            return -1;
+        }
+        free_twm_node_tree(t->head);
+        t->head = NULL;
+        t->focus = NULL;
+        return 0;
+    }
+    
+    //Try to find a reasonable node to focus on
+    twm_node *next_focus;
+    
     int focus_ind = twm_node_indexof(t->focus, parent);
     if (focus_ind < 0) {
         //Propagate error code
@@ -1077,61 +1093,45 @@ int twm_tree_remove_focused(twm_tree *t) {
         return -1;
     }
 
-    twm_node *next_focus;
-    
-    if (parent == NULL) {
-        //This means there was only one node in the tree. Make sure that's
-        //the case, then DTRT
-        if (t->head != t->focus || t->focus->type != TWM_LEAF) {
-            t->error_str = TWM_ILLEGAL_DELETE;
+    //Ugly corner case: if this node is the only child of another node,
+    //then that other node is going to be deleted when this one is. So,
+    //we can't focus to that one.
+    if (parent->num_children == 1) {
+        twm_node *grandparent = parent->parent;
+        if (grandparent == NULL) {
+            //I don't know what this means for us, so return an error
+            t->error_str = TWM_BAD_DEVELOPER;
             return -1;
         }
         
-        destroy_twm_node(t->focus);
-        
-        t->head = NULL;
-        t->focus = NULL;
-        
-        t->error_str = TWM_SUCC;
-        return 0;
-    } else {
-        //Ugly corner case: if this node is the only child of another node,
-        //then that other node is going to be deleted when this one is. So,
-        //we can't focus to that one.
-        if (parent->num_children == 1) {
-            twm_node *grandparent = parent->parent;
-            if (grandparent == NULL) {
-                //I don't know what this means for us, so return an error
-                t->error_str = TWM_BAD_DEVELOPER;
-                return -1;
-            }
-            
-            int parent_ind = twm_node_indexof(parent, grandparent);
-            if (parent_ind < 0) {
-                //Propagate error
-                t->error_str = grandparent->error_str;
-                return -1;
-            }
-            
-            int ind = (parent_ind + 1) % grandparent->num_children;
-            next_focus = grandparent->children[ind];
-        } else if (parent->num_children == 2) {
-            //On deletion, the other child of this node will be merged into
-            //the parent. So next_focus should just be the parent
-            next_focus = parent;
-        } else {
-            int ind = (focus_ind + 1) % parent->num_children;
-            next_focus = parent->children[ind];
+        int parent_ind = twm_node_indexof(parent, grandparent);
+        if (parent_ind < 0) {
+            //Propagate error
+            t->error_str = grandparent->error_str;
+            return -1;
         }
+        
+        int ind = (parent_ind + 1) % grandparent->num_children;
+        next_focus = grandparent->children[ind];
+    } else if (parent->num_children == 2) {
+        //On deletion, the other child of this node will be merged into
+        //the parent. So next_focus should just be the parent
+        next_focus = parent;
+    } else {
+        int ind = (focus_ind + 1) % parent->num_children;
+        next_focus = parent->children[ind];
     }
     
+    //We have found a suitable node to focus on. Delete the old one
     int rc = twm_remove_node(t, parent, focus_ind);
     if (rc < 0) {
         return -1; //twm_remove_node has already set the error code
     }
     
-    destroy_twm_node(t->focus);
+    //Release resources from deleted subtree
+    free_twm_node_tree(t->focus);
     
+    //Make sure to set focus and redraw
     t->focus = next_focus;
     t->focus->has_focus = 1;
     
@@ -1512,6 +1512,11 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h) {
     if (w < 0 || h < 0) {
         t->error_str = TWM_BAD_SZ;
         return -1;
+    }
+    
+    if (t->head == NULL) {
+        //This is an empty tree. For now, just do nothing
+        return 0;
     }
     
     int bytes_needed = draw_sz_twm_node(t->head, w, h);
