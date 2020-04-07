@@ -28,6 +28,7 @@
 #define addr_keep_logging  9 
 #define addr_keep_dropping 10
 #define addr_dut_reset     11
+#define addr_latch         15
 
 typedef struct _fake_dbg_guv {    
     //S1 registers
@@ -293,6 +294,7 @@ int main(int argc, char **argv) {
         int input_valid;
         
         if (input_buf_pos == 4) {
+            //Buffer contains complete input flit
             input_valid = 1;
         } else {
             //Need to read more bytes
@@ -313,6 +315,11 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "Input pipe disconnected\n");
                     break;
                 } else if (can_read_input.revents & POLLIN) {
+                    //Unfortunate: no guarantee that we will read an entire
+                    //input flit (4 bytes) so we need to do this awful
+                    //buffering trick. There must be an easier way...
+                    //Note to self: try googling "Linux: wait for n bytes to
+                    //read" and look more carefully
                     int rc = read(STDIN_FILENO, input_buf + input_buf_pos, 4 - input_buf_pos);
                     if (rc < 0) {
                         perror("Could not read from input");
@@ -320,16 +327,18 @@ int main(int argc, char **argv) {
                     }
                     
                     input_buf_pos += rc;
+                    //If buffer contains complete input flit
                     input_valid = (input_buf_pos == 4);
                 }
             }
         }
         
-        //Look at pause/drop/log/flags to figure out if we should read from
-        //the input
+        //We have an input, now what should we do with it?
         if (input_valid) {
             unsigned input_val = *(unsigned*)input_buf;
             
+            //Look at pause/drop/log/flags to figure out if we should read 
+            //from the input
             int copy_to_log = (d.log_cnt > 0 || d.keep_logging);
             int copy_to_out = (d.log_cnt == 0 && d.keep_dropping == 0);
             
@@ -346,6 +355,7 @@ int main(int argc, char **argv) {
                     out_args.vld = 1;
                     pthread_mutex_unlock(&out_args);
                 } else {
+                    //If we're not copying to the output, it's because we're dropping!
                     if (d.drop_cnt > 0) d.drop_cnt--;
                 }
                 
@@ -363,15 +373,126 @@ int main(int argc, char **argv) {
                     d.log_data = input_val;
                     d.is_receipt = 0;
                 }
+                
+                //Done reading this input from the buffer
                 input_buf_pos = 0;
             }
-            
+        } //END if (input_valid)
+        
+        
+        //Read a command 
+        
+        //Again, we have to do our ugly buffering since there's no guarantee
+        //that we read an entire command each time
+        struct pollfd can_read_command = {
+            .fd = 3,
+            .events = POLLIN | POLLHUP
+        };
+        
+        rc = poll(&can_read_command, 1, 0);
+        if (rc < 0) {
+            perror("Could not issue command reading poll call");
+            break;
+        } else if (rc > 0) {
+            if (can_read_command.revents & POLLHUP) {
+                fprintf(stderr, "Command pipe disconnected\n");
+                break;
+            } else if (can_read_command.revents & POLLIN) {
+                //Unfortunate: no guarantee that we will read an entire
+                //command (8 bytes) so we need to do this awful
+                //buffering trick. 
+                int rc = read(3, cmd_buf + cmd_buf_pos, 8 - cmd_buf_pos);
+                if (rc < 0) {
+                    perror("Could not read from command stream");
+                    break;
+                }
+                
+                cmd_buf_pos += rc;
+            }
         }
         
-        
-        //Read a command input
-        
-        //If latch command, overwrite receipt registers
+        //If cmd_buf contains full command, parse it and act accordingly
+        if (cmd_buf_pos == 8) {
+            cmd_buf_pos = 0; //We have read the command
+            
+            unsigned cmd_addr_raw = ((unsigned *)cmd_buf)[0];
+            unsigned cmd_val = ((unsigned *)cmd_buf)[1];
+            
+            unsigned reg_addr = cmd_addr_raw & 0xF;
+            unsigned targeted_guv = (cmd_addr_raw >> 4) & 0xF;
+            
+            //If this message is not for us, we don't have to do anything
+            if (targeted_guv != guv_addr) {
+                sched_yield(); //Not sure if this is really needed, but whatever
+                continue;
+            }
+            
+            switch (reg_addr) {
+            //Registers currently supported by this software model
+            case addr_keep_dropping:
+                d.keep_dropping_r = (val & 1); //Matches what real hardware does
+                break;
+            case addr_drop_cnt:
+                d.drop_cnt_r = (val & 0x3FF); //Matches what real hardware does
+                break;
+            case addr_keep_logging:
+                d.keep_logging_r = (val & 1); //Matches what real hardware does
+                break;
+            case addr_log_cnt:
+                d.log_cnt_r = (val & 0x3FF); //Matches what real hardware does
+                break;
+            case addr_keep_pausing:
+                d.keep_pausing_r = (val & 1); //Matches what real hardware does
+                break;
+            case addr_inj_TVALID:
+                d.addr_inj_TVALID_r = (val & 1); //Matches what real hardware does
+                break;
+            case addr_inj_TDATA:
+                d.inj_TDATA_r = val;
+                break;
+            }
+            
+            //This could have been in the above switch, but I thought it 
+            //looked cleaner inside in if statement
+            if (reg_addr == addr_latch) {
+                int inj_failed = 0;
+                //Update registers (at least, the ones supported by this model)
+                d.keep_dropping = d.keep_dropping_r;
+                d.drop_cnt      = d.drop_cnt_r;
+                d.keep_logging  = d.keep_logging_r;
+                d.log_cnt       = d.log_cnt_r;
+                d.keep_pausing  = d.keep_pausing_r;
+                
+                inj_failed = d.inj_TVALID;
+                //Real hardware does not clobber inject values on failure,
+                //unless new inj_TVALID is 0
+                if (!inj_failed || d.inj_TVALID == 0) {
+                    d.inj_TVALID    = d.inj_TVALID
+                    d.inj_TDATA     = d.inj_TDATA
+                }
+                
+                //Put command receipt together. Matches my (misguided?)
+                //choice in hardware to send back information about the
+                //"scratch" registers instead of the real ones
+                
+                //TODO: proper header needed, but this is good enough for now
+                receipt_hdr = 0b10000 | guv_addr;
+                receipt_data = 
+                    d.keep_pausing_r  ?        1 : 0 |
+                    d.keep_logging_r  ? (1 << 1) : 0 |
+                    d.keep_dropping_r ? (1 << 2) : 0 |
+                    d.log_cnt_r       ? (1 << 3) : 0 |
+                    d.drop_cnt_r      ? (1 << 4) : 0 |
+                    d.inj_TVALID_r    ? (1 << 5) : 0 |
+                    //Skip dut_reset since we don't model it here
+                    inj_failed        ? (1 << 7) : 0
+                    //Skip dout_not_ready_cnt since we don't model it here
+                ;
+                receipt_vld = 1;
+            }
+        } //END if (cmd_buf_pos == 8)
+            
+        sched_yield();
     }
     
     //Try to properly close out the threads
