@@ -22,7 +22,9 @@
     X(UNUSED_14        ),\
     X(LATCH            ),\
     /*These next commands are for timonerie rather than a dbg_guv*/\
-    X(DUMMY)
+    X(DUMMY),\
+    X(OPEN),\
+    X(CLOSE)
     
 
 #define X(x) x
@@ -46,6 +48,7 @@ typedef struct _dbg_cmd {
     unsigned dbg_guv_addr;
     //TODO: also parse FPGA number?
     
+    symtab *
     
     //Error information
     char const *error_str;

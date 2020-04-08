@@ -288,10 +288,10 @@ static cmd_info builtin_cmds[] = {
     {"name",	NULL},  //Rename active dbg_guv
     {"show",	NULL},  //Show active dbg_guv
     {"hide",	NULL},  //Hide active dbg_guv
-    {"left",	NULL},  //Move active dbg_guv to the left
-    {"right",	NULL},  //Move active dbg_guv to the right
-    {"up",	    NULL},  //Move active dbg_guv up
-    {"down",	NULL},  //Move active dbg_guv down
+    {"l",	    NULL},  //Move active dbg_guv to the left
+    {"r",	    NULL},  //Move active dbg_guv to the right
+    {"u",	    NULL},  //Move active dbg_guv up
+    {"d",	    NULL},  //Move active dbg_guv down
 };
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
@@ -309,7 +309,7 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
     
     //Check which command this is
     char cmd[16];
-    sscanf(str, "%15s", cmd);
+    int num_read = sscanf(str, "%15s", cmd);
     //For now, check for special dummy command
     if (!strcmp(cmd, "dummy")) {
         dest->type = DUMMY;
