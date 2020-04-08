@@ -141,6 +141,11 @@ int draw_sz_dbg_guv(void *item, int w, int h);
 //area of the screen
 void trigger_redraw_dbg_guv(void *item);
 
+//Simply scrolls the dbg_guv; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void dbg_guv_scroll(dbg_guv *d, int amount);
+
 extern draw_operations const dbg_guv_draw_ops;
 
 ///////////////////////////////////////////////////////

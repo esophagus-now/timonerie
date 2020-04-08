@@ -132,8 +132,6 @@ void got_rl_line(char *str) {
     cursor_pos(1,2);
     char line[80];
     int len;
-    sprintf(line, "Read line: %s" ERASE_TO_END "%n", str, &len);
-    write(1, line, len);
     /* If the line has any text in it, save it on the history. */
     if (str && *str) {
         dbg_cmd cmd;
@@ -294,7 +292,7 @@ void callback(new_fpga_cb_info info) {
 int main(int argc, char **argv) {    
     int rc;
     atexit(clean_screen);
-    term_init();
+    term_init(0);
     
     init_readline(got_rl_line);
     
@@ -336,33 +334,16 @@ int main(int argc, char **argv) {
     
     int mode = NORMAL;
     
-    int num_samples = 0;
-    unsigned long sum = 0;
-    
     //Main event loop
     while(1) {
-        char c;     
+        char c;  
+        char errmsg[80];   
         
         pthread_mutex_lock(&t_mutex);
-        //redraw_twm_node_tree(t->head);
-        clock_t clk = clock();
-        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 11, term_cols, (term_rows - 2 - 8 - 2));
-        clk = clock() - clk;
-        sum += clk;
-        num_samples++;
-        if (num_samples == 500000) {
-            char *msg = malloc(80);
-            sprintf(msg, "Average time: %lf ms", ((double) sum / 500.0) / ((double) CLOCKS_PER_SEC));
-            char *old = msg_win_append(err_log, msg);
-            if (old) free(old);
-            num_samples = 0;
-            sum = 0;
-        }
+        rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
         if (rc < 0) {
-            char *errmsg = malloc(80);
             sprintf(errmsg, "Could not draw tree: %s", t->error_str);
-            char *old = msg_win_append(err_log, errmsg);
-            if (old != NULL) free(old);
+            msg_win_dynamic_append(err_log, errmsg);
         } else if (rc > 0) {
             if (mode == READLINE) place_readline_cursor();
         }
@@ -372,75 +353,44 @@ int main(int argc, char **argv) {
         //Are any fds available for reading right now?
         rc = poll(pfd_arr->pfds, pfd_arr->num, 0);
         
-        #ifdef DEBUG_ON
-        if (num_poll_logs < 100) {
-            fprintf(stderr, "poll returned %d\n", rc);
-            fflush(stderr);
-            num_poll_logs++;
-        }
-        #endif
-        
         if (rc < 0) {
             int saved_errno = errno;
-            char *errmsg = malloc(80);
             sprintf(errmsg, "Could not issue poll system call: %s", strerror(saved_errno));
-            char *old = msg_win_append(err_log, errmsg);
-            if (old != NULL) free(old);
+            msg_win_dynamic_append(err_log, errmsg);
         } else {
             //Traverse the active fds in pfd_arr
             struct pollfd *cur = NULL;
             while ((cur = pollfd_array_get_active(pfd_arr, cur)) != NULL) {
                 //Check if this connection was lost
                 if (cur->revents & POLLHUP) {
-                    char *errmsg = malloc(80);
                     sprintf(errmsg, "A socket was unexpectedly closed");
-                    char *old = msg_win_append(err_log, errmsg);
-                    if (old != NULL) free(old);
+                    msg_win_dynamic_append(err_log, errmsg);
                     //Remove from pollfd_array? The traversal function needs 
                     //to be smart...
-                    continue;
+                    break;
                 }
                 
                 //Get the fpga_connection_info associated with this fd
                 void **v = pollfd_array_get_user_data(pfd_arr, cur);
                 if (v == NULL) {
-                    char *errmsg = malloc(80);
                     sprintf(errmsg, "Could not issue poll system call: %s", pfd_arr->error_str);
-                    char *old = msg_win_append(err_log, errmsg);
-                    if (old != NULL) free(old);
+                    msg_win_dynamic_append(err_log, errmsg);
                     continue;
                 }
                 fpga_connection_info *f = (fpga_connection_info*)*v;
                 
                 rc = read_fpga_connection(f, cur->fd, 4, err_log);
                 if (rc < 0) {
-                    char *errmsg = malloc(80);
                     sprintf(errmsg, "Could not handle information from FPGA: %s", f->error_str);
-                    char *old = msg_win_append(err_log, errmsg);
-                    if (old != NULL) free(old);
+                    msg_win_dynamic_append(err_log, errmsg);
                     continue;
                 }
             }
             //Make sure no errors occurred while we traversed the active fds
             if (pfd_arr->error_str != PFD_ARR_SUCC) {
-                    char *errmsg = malloc(80);
                     sprintf(errmsg, "pollfd_array_get_active_error: %s", pfd_arr->error_str);
-                    char *old = msg_win_append(err_log, errmsg);
-                    if (old != NULL) free(old);
+                    msg_win_dynamic_append(err_log, errmsg);
             }
-        }
-        
-        //Draw the message window
-        //This is only temporay, to make it easier for me to see error
-        //information
-        len = draw_fn_msg_win(err_log, 1, 3, term_cols, 8, line);
-        if (len > 0) {
-            write(1, line, len);
-            if (mode == READLINE) {
-                //Put cursor in the right place
-                place_readline_cursor();
-            }
-            err_log->need_redraw = 0;
         }
         
         //Draw "status bar"
@@ -450,7 +400,6 @@ int main(int argc, char **argv) {
             write(1, line, len);
             status_drawn = 1;
         }
-        
         
         //A little slow but we'll read one character at a time, guarding each
         //one with the mutexes. For more speed, we should read them out in a 
@@ -469,9 +418,6 @@ int main(int argc, char **argv) {
         
         //If user pressed CTRL-D we can quit
         if (c == '\x04') {
-            #ifdef DEBUG_ON
-            fprintf(stderr, "Caught ctrl-D\n");
-            #endif
             pthread_mutex_lock(&q.mutex);
             q.num_producers = -1;
             q.num_consumers = -1;
@@ -498,136 +444,81 @@ int main(int argc, char **argv) {
             }
             int rc = textio_getch_cr(c, &in);
             if (rc == 0) {
-                int len = 0;
                 switch(in.type) {
-                case TEXTIO_GETCH_PLAIN: {
-                    int tmp;
-                    sprintf(line, "You entered: 0x%02x%n", in.c & 0xFF, &tmp);
-                    len = tmp;
-                    if (isprint(in.c)) {
-                        sprintf(line + tmp, " = \'%c\'" ERASE_TO_END "%n", in.c, &tmp);
-                        len += tmp;
-                    } else {
-                        sprintf(line + tmp, " = <?>" ERASE_TO_END "%n", &tmp);
-                        len += tmp;
-                    }        
-                    if (mode == NORMAL && in.c == ':') {
-                        mode = READLINE;
-                        disable_mouse_reporting();
-                        readline_redisplay();
-                        status_drawn = 0;
-                        continue;
+                case TEXTIO_GETCH_PLAIN:
+                    if (mode == NORMAL) {
+                        if (in.c == ':') {
+                            cursor_pos(1, term_rows);
+                            write(1, ": " ERASE_TO_END, sizeof(": " ERASE_TO_END));
+                            mode = READLINE;
+                        }
                     }
-                    break;
-                } case TEXTIO_GETCH_UNICODE:
-                    sprintf(line, "You entered: %s" ERASE_TO_END "%n", in.wc, &len);
-                    break;
-                case TEXTIO_GETCH_FN_KEY:
-                    sprintf(line, "You entered: %s%s%s%s" ERASE_TO_END "%n", 
-                        in.shift ? "(shift)" : "", 
-                        in.meta ? "(alt)" : "", 
-                        in.ctrl ? "(ctrl)" : "", 
-                        FN_KEY_NAMES[in.key], 
-                        &len
-                    );
-                    if (mode == NORMAL)
-                    switch(in.key) {
-                    case TEXTIO_KEY_UP:
-                        if (in.meta) {
-                            rc = twm_tree_move_focused_node(t, TWM_UP);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move window up: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        } else if (!in.shift && !in.ctrl) {
-                            rc = twm_tree_move_focus(t, TWM_UP);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move focus up: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
+                case TEXTIO_GETCH_FN_KEY: {
+                    if (mode == NORMAL) {
+                        int dir;
+                        int got_arrow_key = 1;
+                        switch(in.key) {
+                        case TEXTIO_KEY_UP:
+                            dir = TWM_UP;
+                            break;
+                        case TEXTIO_KEY_DOWN:
+                            dir = TWM_DOWN;
+                            break;
+                        case TEXTIO_KEY_LEFT:
+                            dir = TWM_LEFT;
+                            break;
+                        case TEXTIO_KEY_RIGHT:
+                            dir = TWM_RIGHT;
+                            break;
+                        default:
+                            got_arrow_key = 0;
+                            break;
+                        }
+                        
+                        if (got_arrow_key) {
+                            if (in.meta && in.shift) {
+                                int rc = twm_tree_move_focused_node(t, dir);
+                                if (rc < 0) {
+                                    sprintf(errmsg, "Could not move window: %s", t->error_str);
+                                    msg_win_dynamic_append(err_log, errmsg);
+                                }
+                            } else if (in.meta) {
+                                int rc = twm_tree_move_focus(t, dir);
+                                if (rc < 0) {
+                                    sprintf(errmsg, "Could not move focus: %s", t->error_str);
+                                    msg_win_dynamic_append(err_log, errmsg);
+                                }
+                            } else if (!in.meta && !in.shift) {
+                                dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+                                if (g) {
+                                    if (dir == TWM_UP) dbg_guv_scroll(g, in.ctrl ? 10: 1);
+                                    if (dir == TWM_DOWN) dbg_guv_scroll(g, in.ctrl ? -10: -1);
+                                }
+                                msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
+                                if (m) {
+                                    if (dir == TWM_UP) msg_win_scroll(m, in.ctrl ? 10: 1);
+                                    if (dir == TWM_DOWN) msg_win_scroll(m, in.ctrl ? -10: -1);
+                                }
                             }
                         }
-                        break;
-                    case TEXTIO_KEY_DOWN:
-                        if (in.meta) {
-                            rc = twm_tree_move_focused_node(t, TWM_DOWN);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move window down: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        } else if (!in.shift && !in.ctrl) {
-                            rc = twm_tree_move_focus(t, TWM_DOWN);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move focus down: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        }
-                        break;
-                    case TEXTIO_KEY_LEFT:
-                        if (in.meta) {
-                            rc = twm_tree_move_focused_node(t, TWM_LEFT);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move window left: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        } else if (!in.shift && !in.ctrl) {
-                            rc = twm_tree_move_focus(t, TWM_LEFT);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move focus left: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        }
-                        break;
-                    case TEXTIO_KEY_RIGHT:
-                        if (in.meta) {
-                            rc = twm_tree_move_focused_node(t, TWM_RIGHT);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move window right: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        } else if (!in.shift && !in.ctrl) {
-                            rc = twm_tree_move_focus(t, TWM_RIGHT);
-                            if (rc < 0) {
-                                char *errmsg = malloc(80);
-                                sprintf(errmsg, "Could not move focus right: %s", t->error_str);
-                                char *old = msg_win_append(err_log, errmsg);
-                                if (old) free(old);
-                            }
-                        }
-                        break;
-                    default:
-                        //Remove warnings
-                        break;
                     }
                     
                     break;
+                }
                 case TEXTIO_GETCH_ESCSEQ:
                     switch(in.code) {
-                    case 'q':
+                    case 'n':
                         if (mode == READLINE) {
-                            status_drawn = 0;
                             mode = NORMAL;
-                            enable_mouse_reporting();
-                        } else {
+                            status_drawn = 0;
+                        }
+                        break;
+                    case 'q':
+                        if (mode == NORMAL) {
                             rc = twm_tree_remove_focused(t);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not delete window: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not delete window: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
@@ -635,10 +526,8 @@ int main(int argc, char **argv) {
                         if (mode == NORMAL) {
                             rc = twm_set_stack_dir_focused(t, TWM_VERT);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not set to vertical: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not set to vertical: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
@@ -646,10 +535,8 @@ int main(int argc, char **argv) {
                         if (mode == NORMAL) {
                             rc = twm_set_stack_dir_focused(t, TWM_HORZ);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not set to horizontal: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not set to horizontal: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
@@ -657,10 +544,8 @@ int main(int argc, char **argv) {
                         if (mode == NORMAL) {
                             rc = twm_toggle_stack_dir_focused(t);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not toggle stack direction: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not toggle stack direction: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
@@ -668,10 +553,8 @@ int main(int argc, char **argv) {
                         if (mode == NORMAL) {
                             rc = twm_tree_move_focus(t, TWM_PARENT);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not move focus up: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not move focus up: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
@@ -679,61 +562,23 @@ int main(int argc, char **argv) {
                         if (mode == NORMAL) {
                             rc = twm_tree_move_focus(t, TWM_CHILD);
                             if (rc < 0) {
-                                char *error_msg = malloc(80);
-                                sprintf(error_msg, "Could not move focus down: %s", t->error_str);
-                                char *old = msg_win_append(err_log, error_msg);
-                                if (old) free(old);
+                                sprintf(errmsg, "Could not move focus down: %s", t->error_str);
+                                msg_win_dynamic_append(err_log, errmsg);
                             }
                         }
                         break;
                     default:
-                        sprintf(line, "You entered some kind of escape sequence ending in %c" ERASE_TO_END "%n", in.code, &len);
+                        //Gets rid of warnings
                         break;
                     }
                     break;
-                case TEXTIO_GETCH_MOUSE: {
-                    if (FIX_THIS != NULL) {
-                        dbg_guv *g = &FIX_THIS->guvs[0];
-                        dbg_guv *h = &FIX_THIS->guvs[1];
-                        //Just for fun: use scrollwheel inside dbg_guv
-                        if (in.btn == TEXTIO_WUP) {
-                            g->need_redraw = 1;
-                            if (g->log_pos < DBG_GUV_SCROLLBACK - 1) g->log_pos++;
-                            h->need_redraw = 1;
-                            if (h->log_pos < DBG_GUV_SCROLLBACK - 1) h->log_pos++;
-                            err_log->need_redraw = 1;
-                            if (err_log->buf_offset < MSG_WIN_SCROLLBACK - 1) err_log->buf_offset++;
-                        } else if (in.btn == TEXTIO_WDN) {
-                            g->need_redraw = 1;
-                            if (g->log_pos > 0) g->log_pos--;
-                            h->need_redraw = 1;
-                            if (h->log_pos > 0) h->log_pos--;
-                            err_log->need_redraw = 1;
-                            if (err_log->buf_offset > 0) err_log->buf_offset--;
-                        }
-                    }
-                    
-                    sprintf(line, "Mouse: %s%s%s%s at %d,%d" ERASE_TO_END "%n", 
-                        in.shift ? "(shift)" : "", 
-                        in.meta ? "(alt)" : "", 
-                        in.ctrl ? "(ctrl)" : "", 
-                        BUTTON_NAMES[in.btn],
-                        in.x,
-                        in.y,
-                        &len);
+                default:
+                    //Gets rid of warnings
                     break;
                 }
-                }
-                cursor_pos(1,1);
-                if (len != 0) write(1, line, len); //Writing a length of 0 has weird effects
-                if (mode == READLINE) {
-                    //Put cursor in the right place
-                    place_readline_cursor();
-                }
             } else if (rc < 0) {
-                cursor_pos(1,5);
-                sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x" ERASE_TO_END "%n", in.error_str, in.smoking_gun & 0xFF, &len);
-                write(1, line, len);
+                sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
+                msg_win_dynamic_append(err_log, line);
             }
         }
         

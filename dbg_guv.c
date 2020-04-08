@@ -446,6 +446,15 @@ void trigger_redraw_dbg_guv(void *item) {
     d->need_redraw = 1;
 }
 
+//Simply scrolls the linebuf; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void dbg_guv_scroll(dbg_guv *d, int amount) {
+    d->log_pos += amount;
+    if (d->log_pos < 0) d->log_pos = 0;
+    if (d->log_pos >= d->logs.nlines) d->log_pos = d->logs.nlines - 1;
+}
+
 draw_operations const dbg_guv_draw_ops = {
     draw_fn_dbg_guv,
     draw_sz_dbg_guv,

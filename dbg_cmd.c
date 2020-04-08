@@ -536,21 +536,18 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
     }
     str += num_read;
     
-    //Special case: don't use %s to parse ';' command
-    if (*str == ';') {
-        str++;
-        int rc = parse_dbg_reg_cmd(dest, str);
-        if (rc < 0) {
-            return -1; //dest->error_str already set
-        } else {
-            dest->error_str = DBG_CMD_SUCCESS;
-            return 0;
-        }
+    //Special case: try reading an action. If it fails we default to the
+    //usual command entering methods
+    int rc = parse_dbg_reg_cmd(dest, str);
+    if (rc == 0) {
+        //We're good! Don't bother trying to match a command in the list;
+        //we've already succesfully parsed a dbg_reg command
+        return 0;
     }
     
     //Check which command this is
     char cmd[16];
-    int rc = sscanf(str, "%15s%n", cmd, &num_read);
+    rc = sscanf(str, "%15s%n", cmd, &num_read);
     if (rc < 1) {
         dest->error_str = DBG_CMD_EXP_OP;
         return -1;

@@ -275,6 +275,11 @@ int draw_sz_msg_win(void *item, int w, int h);
 //area of the screen
 void trigger_redraw_msg_win(void *item);
 
+//Simply scrolls the msg_win; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void msg_win_scroll(msg_win *m, int amount);
+
 extern draw_operations const msg_win_draw_ops;
 
 //////////////////////////////////////////////////

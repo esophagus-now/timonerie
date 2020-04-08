@@ -80,7 +80,7 @@ static void get_term_sz() {
 }
 
 //Returns 0 on success, -1 on error
-int term_init() {
+int term_init(int enable_mouse) {
     //Check if we are outputting to a TTY
     if (isatty(1) == 0) {
         fprintf(stderr, "Cannot use fancy UI when not ouputting to a TTY\n");
@@ -118,8 +118,10 @@ int term_init() {
     write(1, ALT_BUF_ON, LEN_ALT_BUF_ON);
     //Clear the screen
     write(1, ERASE_ALL, LEN_ERASE_ALL);
-    //Turn on mouse reporting
-    write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
+    if (enable_mouse) {
+        //Turn on mouse reporting
+        write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
+    }
     
     cursor_pos(0,0);
     return 0;
@@ -880,9 +882,10 @@ int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf) 
     if (w == 0 || h == 0) return 0; //Nothing to draw
     if (x >= term_cols || y >= term_rows) return 0; //Nothing to draw
     
-    if (offset + w >= l->nlines) {
-        l->error_str = TEXTIO_OOB;
-        return -1;
+    if (offset + (h-1) >= l->nlines) {
+        /*l->error_str = TEXTIO_OOB;
+        return -1;*/
+        offset = (l->nlines - 1) - (h-1);
     }
     
     if (x < 0 || y < 0 || w < 0 || h < 0) {
@@ -1056,7 +1059,7 @@ int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {
     }
     buf += incr;
     
-    //m->need_redraw = 0; //Removed for debugging
+    m->need_redraw = 0;
     
     return buf - buf_saved;
 }
@@ -1090,6 +1093,15 @@ void trigger_redraw_msg_win(void *item) {
     if (!m) return;
     
     m->need_redraw = 1;
+}
+
+//Simply scrolls the linebuf; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void msg_win_scroll(msg_win *m, int amount) {
+    m->buf_offset += amount;
+    if (m->buf_offset < 0) m->buf_offset = 0;
+    if (m->buf_offset >= m->l.nlines) m->buf_offset = m->l.nlines - 1;
 }
 
 draw_operations const msg_win_draw_ops = {
