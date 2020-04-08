@@ -164,8 +164,9 @@ void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn);
 //-2 if t was NULL, or -1 (and sets t->error_str) on error
 int twm_tree_remove_item(twm_tree *t, void *item);
 
-//Sets the tree's focus to the first node containing item. Follows usual 
-//return code pattern
+//Sets the tree's focus to the first node containing item. Returns 0 on 
+//success, -1 if item was not found (or another error occurred; check
+//t->error_str). Returns -2 if t was NULL
 int twm_tree_focus_item(twm_tree *t, void *item);
 
 //Forces entire tree to redraw. Follows usual return code convention

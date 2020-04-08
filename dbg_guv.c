@@ -202,6 +202,9 @@ err_freeaddrinfo:
 err_delete_f:
     if (err_occurred) del_fpga_connection(f);
 err_nothing:
+    //These were copied in new_fpga_connection
+    free(args->node);
+    free(args->serv);
     free(args);
     //Let the callback know what happened, if we have one
     if(cb != NULL) cb(ret);
@@ -231,8 +234,10 @@ int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data
     
     args->f = f;
     args->cb = cb;
-    args->node = node;
-    args->serv = serv;
+    //Duplicate node and serv, since the caller might not leave them untouched
+    //for long
+    args->node = strdup(node);
+    args->serv = strdup(serv);
     args->user_data = user_data;
     
     //Spin up thread that opens connection

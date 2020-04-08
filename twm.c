@@ -1740,8 +1740,9 @@ static twm_node* find_item(twm_tree *tree, twm_node *t, void *item) {
     return NULL;
 }
 
-//Sets the tree's focus to the first node containing item. Follows usual 
-//return code pattern
+//Sets the tree's focus to the first node containing item. Returns 0 on 
+//success, -1 if item was not found (or another error occurred; check
+//t->error_str). Returns -2 if t was NULL
 int twm_tree_focus_item(twm_tree *t, void *item) {
     if (t == NULL) {
         return -2;

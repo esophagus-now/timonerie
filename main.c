@@ -128,6 +128,20 @@ pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
 //callback... me wonders if this is getting out of hand
 pollfd_array *pfd_arr = NULL;
 
+//You know what? It's time to embrace the globals! I need to simplify my
+//life if I'm ever gonna finish this
+typedef enum {
+    SYM_FCI,
+    SYM_DG
+} sym_type;
+
+typedef struct {
+    sym_type type;
+    void *v;
+} sem_val;
+
+static symtab *ids = NULL;
+
 typedef struct _fci_list {
     fpga_connection_info *f;
     struct _fci_list *prev, *next;
@@ -141,9 +155,16 @@ fci_list fci_head = {
 
 void callback(new_fpga_cb_info info) {
     fpga_connection_info *f = info.f;
+    symtab_entry *e = (symtab_entry*) info.user_data;
     if (f == NULL) {
         char line[80];
         sprintf(line, "Could not connect to FPGA: %s", info.error_str);
+        msg_win_dynamic_append(err_log, line);
+        symtab_array_remove(ids, e);
+        return;
+    } else {
+        char line[120];
+        sprintf(line, "Connection [%s] opened", e->sym);
         msg_win_dynamic_append(err_log, line);
         return;
     }
@@ -156,7 +177,7 @@ void callback(new_fpga_cb_info info) {
     fci_head.next = n;
     
     //TEMPORARY: until I add the commands, we'll do this for now
-    dbg_guv *g = &f->guvs[0];
+    /*dbg_guv *g = &f->guvs[0];
     dbg_guv_set_name(g, "FIZZCNT");
     
     if (t != NULL) {
@@ -184,9 +205,9 @@ void callback(new_fpga_cb_info info) {
             if (old != NULL) free(old);
         }
         pthread_mutex_unlock(&t_mutex);
-    }
+    }*/
     
-    pollfd_array *p = (pollfd_array *)info.user_data;
+    pollfd_array *p = pfd_arr;
     int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
     if (rc < 0) {
         char line[80];
@@ -195,9 +216,13 @@ void callback(new_fpga_cb_info info) {
         if (old != NULL) free(old);
         return;
     }
+    
+    sym_dat(e, sem_val*)->type = SYM_FCI;
+    sym_dat(e, sem_val*)->v = f;
+    sym_dat(e, sem_val*)->v = f;
 }
 
-void got_rl_line(char *str) {
+void got_rl_line(char *str) {    
     cursor_pos(1,2);
     char line[80];
     int len;
@@ -216,19 +241,69 @@ void got_rl_line(char *str) {
         
         switch(cmd.type) {
         case CMD_OPEN: {
-            //Because we open the FPGA in another thread, the data in cmd 
-            //may change before that thread gets run. So, save a copy in 
-            //here and hope for the best
-            static char node[sizeof(cmd.node)];
-            strcpy(node, cmd.node);
-            static char serv[sizeof(cmd.serv)];
-            strcpy(serv, cmd.serv);
-            char line[256];
-            sprintf(line, "Opening node=[%s], serv=[%s]", node, serv);
-            msg_win_dynamic_append(err_log, line);
-            int rc = new_fpga_connection(callback, node, serv, pfd_arr);
+            symtab_entry *e = symtab_lookup(ids, cmd.id);
+            if (e != NULL) {
+                cursor_pos(1, term_rows - 1);
+                write_const_str("This ID is already in use" ERASE_TO_END);
+                break;
+            }
+            
+            int rc = symtab_append(ids, cmd.id, NULL, 0);
+            if (rc < 0) {
+                char line[80];
+                sprintf("Could not append symbol to table: %s", ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+                break;
+            }
+            
+            //Slow, but who cares?
+            e = symtab_lookup(ids, cmd.id);
+            if (e == NULL) {
+                char line[80];
+                sprintf("Fatal symol table error. Maybe this will help: %s", ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+                break;
+            }
+            
+            rc = new_fpga_connection(callback, cmd.node, cmd.serv, e);
             if (rc < 0) {
                 msg_win_dynamic_append(err_log, "Could not open FPGA connection");
+            }
+            break;
+        }
+        case CMD_SEL: {
+            symtab_entry *e = symtab_lookup(ids, cmd.id);
+            if (!e) {
+                char line[120];
+                sprintf(line, "Could not find [%s]: %s", cmd.id, ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+                break;
+            }
+            dbg_guv *selected;
+            if (sym_dat(e, sem_val*)->type == SYM_FCI) {
+                if (!cmd.has_guv_addr) {
+                    cursor_pos(1, term_rows - 1);
+                    write_const_str(DBG_CMD_SEL_USAGE);
+                    break;
+                }
+                fpga_connection_info *f = sym_dat(e, sem_val*)->v;
+                selected = f->guvs + cmd.dbg_guv_addr;
+            } else {
+                selected = sym_dat(e, sem_val*)->v;
+            }
+            
+            int rc = twm_tree_focus_item(t, selected);
+            if (t->error_str == TWM_NOT_FOUND) {
+                int rc = twm_tree_add_window(t, selected, dbg_guv_draw_ops);
+                if (rc < 0) {
+                    char line[80];
+                    sprintf(line, "Could not add guv to display: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, line);
+                }
+            } else if (rc < 0) {
+                char line[80];
+                sprintf(line, "Error while searching tree: %s", t->error_str);
+                msg_win_dynamic_append(err_log, line);
             }
             break;
         }
@@ -333,7 +408,9 @@ int main(int argc, char **argv) {
     pthread_t prod;
     pthread_create(&prod, NULL, producer, &q);
     
+    //Initialize our (Evil) globals
     pfd_arr = new_pollfd_array(16);
+    ids = new_symtab(32);
     //new_fpga_connection(callback, argc > 1 ? argv[1] : "localhost", argc > 2 ? argv[2] : "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");

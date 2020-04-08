@@ -360,31 +360,35 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    //Try parsing identifier
-    int num_read = 0;
-    int incr;
-    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
-        dest->id,
-        &incr
-    );
     
-    if (rc != 1) {
-        dest->error_str = DBG_CMD_OPEN_USAGE;
+    int rc = skip_whitespace(dest, str);
+    int num_read = rc;
+    str += rc;
+    
+    //Try scanning identifier
+    //I couldn't get sscanf to do what I needed, so I coded up this dinky
+    //"%s" parser
+    int i;
+    for (i = 0; i < MAX_STR_PARAM_SIZE; i++) {
+        char c = *str;
+        if (!isgraph(c) || c == '[') break;
+        dest->id[i] = c;
+        str++;
+        num_read++;
+    }
+    
+    if (i == 0) {
+        dest->error_str = DBG_CMD_SEL_USAGE;
         return -1;
     }
     
-    num_read += incr;
-    str += incr;
-    
-    rc = skip_whitespace(dest, str);
-    num_read += rc;
-    str += rc;
+    dest->id[i] = '\0';
     
     if (*str == '[') {
         str++;
         //This is an fpga[guv_addr] command
         //Try parsing dbg_guv address
-        incr = parse_dbg_guv_addr(dest, str);
+        int incr = parse_dbg_guv_addr(dest, str);
         if (incr < 0) {
             return -1; //dest->error_str already set
         }
@@ -399,7 +403,7 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
     }
     num_read += rc;
     
-    dest->type = CMD_CLOSE;
+    dest->type = CMD_SEL;
     dest->error_str = DBG_CMD_SUCCESS;
     return num_read;
 }
