@@ -24,18 +24,6 @@ char const *const DBG_CMD_BAD_PARAM            = "Malformed parameter value";
 char const *const DBG_CMD_NULL_PTR            = "NULL pointer passed to dbg_cmd parse";
 char const *const DBG_CMD_IMPOSSIBLE        = "The dbg_cmd code somehow reached an area Marco thought was impossible";
 
-/* GRAMMAR:
- * 
- * command : dbg_guv_addr action EOS
- *            ;
- * 
- * action  : 'c'
- *            | cmd_code param
- *            ;
- * 
- * */
-
-
 //Functions for each terminal in the grammar
 //Each returns the number of bytes read from str. On error, return -1 and
 //set dest->error_str appropriately
@@ -291,6 +279,8 @@ static int parse_eos (dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
+//Functions for each non-terminal (i.e. command)
+
 static int parse_open_cmd(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
@@ -446,6 +436,27 @@ static int parse_name_cmd(dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
+static int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    rc = parse_action(dest, str);
+    if (rc < 0) return -1; //parse_action already set dest->error_str
+    str += rc;
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) return -1; //parse_eos already set dest->error_str
+    str += rc;
+    
+    dest->error_str = DBG_CMD_SUCCESS;
+    return 0;
+}
+
 //A lot of my commands just set dest->type and make sure no arguments were
 //given
 #define make_simple_parse_fn(CMD) \
@@ -465,7 +476,8 @@ static int parse_##CMD (dbg_cmd *dest, char const *str) { \
     dest->error_str = DBG_CMD_SUCCESS; \
     return num_read; \
 } \
-struct dbg_cmd_unused ## __LINE__ {}
+struct dbg_cmd_unused ## __LINE__ {} 
+
 //^^That last line is an UNFORGIVABLE hack to swallow the semicolon
 make_simple_parse_fn(CMD_DESEL);
 make_simple_parse_fn(CMD_SHOW);
@@ -483,18 +495,19 @@ typedef struct _cmd_info {
 } cmd_info;
 
 static cmd_info builtin_cmds[] = {
-    {"open",	NULL},  //Open FPGA connection
-    {"close",	NULL},  //Close FPGA connection
-    {"sel",	    NULL},  //Select active dbg_guv
-    {"desel",	NULL},  //De-select active dbg_guv
-    {";",	    NULL},  //Issue a command to active dbg_guv
-    {"name",	NULL},  //Rename active dbg_guv
-    {"show",	NULL},  //Show active dbg_guv
-    {"hide",	NULL},  //Hide active dbg_guv
-    {"left",	NULL},  //Move active dbg_guv to the left
-    {"right",	NULL},  //Move active dbg_guv to the right
-    {"up",	    NULL},  //Move active dbg_guv up
-    {"down",	NULL},  //Move active dbg_guv down
+    {"open",	parse_open_cmd},	   //Open FPGA connection
+    {"close",	parse_close_cmd}	   //Close FPGA connection
+    {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
+    {"desel",	parse_CMD_DESEL},      //De-select active dbg_guv
+    {";",	    parse_open_cmd},	   //Issue a command to active dbg_guv
+    {"name",	parse_name_cmd},	   //Rename active dbg_guv
+    {"show",	parse_CMD_SHOW},	   //Show active dbg_guv
+    {"hide",	parse_CMD_HIDE},	   //Hide active dbg_guv
+    {"l",	    parse_CMD_LEFT},	   //Move active dbg_guv to the left
+    {"r",	    parse_CMD_RIGHT},	   //Move active dbg_guv to the right
+    {"u",	    parse_CMD_UP},	       //Move active dbg_guv up
+    {"d",	    parse_CMD_DOWN},	   //Move active dbg_guv down
+    {"quit",    parse_CMD_QUIT}        //End timonerie session
 };
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd

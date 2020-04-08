@@ -35,7 +35,8 @@
     X(CMD_DOWN),\
     X(CMD_LEFT),\
     X(CMD_RIGHT),\
-    X(CMD_QUIT),
+    X(CMD_QUIT),\
+    X(CMD_INFO),
     
 
 #define X(x) x
