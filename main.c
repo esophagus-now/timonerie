@@ -15,6 +15,7 @@
 #include <readline/history.h>
 #include <poll.h>
 #include <time.h>
+#include <signal.h>
 #include "queue.h"
 #include "textio.h"
 #include "dbg_guv.h"
@@ -152,6 +153,8 @@ fci_list fci_head = {
     .prev = &fci_head,
     .next = &fci_head
 };
+
+int stop = 0;
 
 void callback(new_fpga_cb_info info) {
     fpga_connection_info *f = info.f;
@@ -340,6 +343,9 @@ void got_rl_line(char *str) {
             twm_tree_add_window(t, d, dummy_ops);
             return;
         }
+        case CMD_QUIT: 
+            stop = 1;
+            break;
         case CMD_DBG_REG: {
             int dbg_guv_addr;
             dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
@@ -526,7 +532,7 @@ int main(int argc, char **argv) {
         rc = nb_dequeue_single(&q, &c);
         if (rc > 0) {
             sched_yield();
-            continue;
+            if (!stop) continue;
         } else if (rc < 0) {
             cursor_pos(0,0);
             sprintf(line, "Error reading from queue. Quitting..." ERASE_TO_END "%n", &len);
@@ -536,7 +542,7 @@ int main(int argc, char **argv) {
         
         
         //If user pressed CTRL-D we can quit
-        if (c == '\x04') {
+        if (c == '\x04' || stop) {
             pthread_mutex_lock(&q.mutex);
             q.num_producers = -1;
             q.num_consumers = -1;

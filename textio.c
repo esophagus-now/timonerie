@@ -66,8 +66,6 @@ int cursor_pos_cmd(char *buf, int x, int y){
     return len;
 }
 
-volatile sig_atomic_t called = 0;
-
 static void get_term_sz() {
     //From https://stackoverflow.com/questions/1022957/getting-terminal-width-in-c
     struct winsize w;
@@ -75,8 +73,6 @@ static void get_term_sz() {
     
     term_rows = w.ws_row;
     term_cols = w.ws_col;
-    
-    called = 1;
 }
 
 //Returns 0 on success, -1 on error
@@ -133,7 +129,6 @@ void clean_screen() {
         write(1, REPORT_CURSOR_OFF, LEN_REPORT_CURSOR_OFF);
         tcsetattr(0, TCSANOW, &old);
         changed = 0;
-        printf("Called = %d\n", called);
     }
 }
 
