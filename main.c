@@ -437,6 +437,15 @@ int main(int argc, char **argv) {
                 int used_ansi_code = 1;
                 
                 switch(in.type) {
+                case TEXTIO_GETCH_PLAIN: {
+                    if (in.c == 12) {
+                        int rc = twm_tree_redraw(t);
+                        if (rc < 0) {
+                            sprintf(errmsg, "Could not issue redraw: %s", t->error_str);
+                            msg_win_dynamic_append(err_log, errmsg);
+                        }
+                    }
+                }
                 case TEXTIO_GETCH_FN_KEY: {
                     int dir;
                     int got_arrow_key = 1;
@@ -472,16 +481,16 @@ int main(int argc, char **argv) {
                                 sprintf(errmsg, "Could not move focus: %s", t->error_str);
                                 msg_win_dynamic_append(err_log, errmsg);
                             }
-                        } else if (!in.meta && !in.shift && in.ctrl) {
+                        } else if (!in.meta && in.ctrl) {
                             dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
                             if (g) {
-                                if (dir == TWM_UP) dbg_guv_scroll(g, in.ctrl ? 10: 1);
-                                if (dir == TWM_DOWN) dbg_guv_scroll(g, in.ctrl ? -10: -1);
+                                if (dir == TWM_UP) dbg_guv_scroll(g, in.shift ? 10: 1);
+                                if (dir == TWM_DOWN) dbg_guv_scroll(g, in.shift ? -10: -1);
                             }
                             msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
                             if (m) {
-                                if (dir == TWM_UP) msg_win_scroll(m, in.ctrl ? 10: 1);
-                                if (dir == TWM_DOWN) msg_win_scroll(m, in.ctrl ? -10: -1);
+                                if (dir == TWM_UP) msg_win_scroll(m, in.shift ? 10: 1);
+                                if (dir == TWM_DOWN) msg_win_scroll(m, in.shift ? -10: -1);
                             }
                             
                             if (g == NULL && m == NULL) {

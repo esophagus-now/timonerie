@@ -453,6 +453,7 @@ void dbg_guv_scroll(dbg_guv *d, int amount) {
     d->log_pos += amount;
     if (d->log_pos < 0) d->log_pos = 0;
     if (d->log_pos >= d->logs.nlines) d->log_pos = d->logs.nlines - 1;
+    d->need_redraw = 1;
 }
 
 draw_operations const dbg_guv_draw_ops = {

@@ -1110,6 +1110,7 @@ void msg_win_scroll(msg_win *m, int amount) {
     m->buf_offset += amount;
     if (m->buf_offset < 0) m->buf_offset = 0;
     if (m->buf_offset >= m->l.nlines) m->buf_offset = m->l.nlines - 1;
+    m->need_redraw = 1;
 }
 
 draw_operations const msg_win_draw_ops = {
