@@ -51,8 +51,14 @@ static void* fpga_egress_thread(void *arg) {
 }
 
 static void init_dbg_guv(dbg_guv *d, fpga_connection_info *f, int addr) {
+    memset(d, 0, sizeof(dbg_guv));
+    
     init_linebuf(&d->logs, DBG_GUV_SCROLLBACK);
     pthread_mutex_init(&d->logs_mutex, NULL);
+    
+    char line[80];
+    sprintf(line, "%p[%d]", f, addr);
+    d->name = strdup(line);
     
     d->need_redraw = 1; //Need to draw when first added in
     d->values_unknown = 1;
@@ -75,7 +81,7 @@ static void deinit_dbg_guv(dbg_guv *d) {
 //A helper function to properly allocate, construct, and initialize an 
 //fpga_connection_info struct.
 static fpga_connection_info *construct_fpga_connection() {
-    fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
+    fpga_connection_info *ret = calloc(1, sizeof(fpga_connection_info));
     if (!ret) return NULL;
     
     int i;

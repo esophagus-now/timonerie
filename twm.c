@@ -1004,6 +1004,8 @@ int twm_tree_add_window(twm_tree *t, void *item, draw_operations draw_ops) {
         //Tree is empty, so just put in this new node
         t->head = to_add;
         t->focus = to_add;
+        to_add->has_focus = 1;
+        redraw_twm_node_tree(t->head);
         
         t->error_str = TWM_SUCC;
         return 0;

@@ -120,10 +120,82 @@ draw_operations const dummy_ops = {
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
 
-twm_tree *t = NULL; //Also fix this too?
+twm_tree *t = NULL; 
 pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-fpga_connection_info *FIX_THIS = NULL;
+//Unfortunately, this has to be global, since got_rl_line needs access to it
+//in order to give it to new_fpga_connection so that it will be passed into
+//callback... me wonders if this is getting out of hand
+pollfd_array *pfd_arr = NULL;
+
+typedef struct _fci_list {
+    fpga_connection_info *f;
+    struct _fci_list *prev, *next;
+} fci_list;
+
+fci_list fci_head = {
+    .f = NULL,
+    .prev = &fci_head,
+    .next = &fci_head
+};
+
+void callback(new_fpga_cb_info info) {
+    fpga_connection_info *f = info.f;
+    if (f == NULL) {
+        char line[80];
+        sprintf(line, "Could not connect to FPGA: %s", info.error_str);
+        msg_win_dynamic_append(err_log, line);
+        return;
+    }
+    
+    fci_list *n = malloc(sizeof(fci_list));
+    n->f = f;
+    n->prev = &fci_head;
+    n->next = fci_head.next;
+    fci_head.next->prev = n;
+    fci_head.next = n;
+    
+    //TEMPORARY: until I add the commands, we'll do this for now
+    dbg_guv *g = &f->guvs[0];
+    dbg_guv_set_name(g, "FIZZCNT");
+    
+    if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
+        int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        } 
+        pthread_mutex_unlock(&t_mutex);
+    }
+    
+    dbg_guv *h = &f->guvs[1];
+    dbg_guv_set_name(h, "FIZZBUZZ");
+    
+    if (t != NULL) {
+        pthread_mutex_lock(&t_mutex);
+        int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
+        if (rc < 0) {
+            char line[80];
+            sprintf(line, "Could not add FIZZBUZZ to tree: %s", t->error_str);
+            char *old = msg_win_append(err_log, strdup(line));
+            if (old != NULL) free(old);
+        }
+        pthread_mutex_unlock(&t_mutex);
+    }
+    
+    pollfd_array *p = (pollfd_array *)info.user_data;
+    int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
+    if (rc < 0) {
+        char line[80];
+        sprintf(line, "Could not add new connection to pollfd array: %s", p->error_str);
+        char *old = msg_win_append(err_log, strdup(line));
+        if (old != NULL) free(old);
+        return;
+    }
+}
 
 void got_rl_line(char *str) {
     cursor_pos(1,2);
@@ -143,6 +215,23 @@ void got_rl_line(char *str) {
         add_history(str);
         
         switch(cmd.type) {
+        case CMD_OPEN: {
+            //Because we open the FPGA in another thread, the data in cmd 
+            //may change before that thread gets run. So, save a copy in 
+            //here and hope for the best
+            static char node[sizeof(cmd.node)];
+            strcpy(node, cmd.node);
+            static char serv[sizeof(cmd.serv)];
+            strcpy(serv, cmd.serv);
+            char line[256];
+            sprintf(line, "Opening node=[%s], serv=[%s]", node, serv);
+            msg_win_dynamic_append(err_log, line);
+            int rc = new_fpga_connection(callback, node, serv, pfd_arr);
+            if (rc < 0) {
+                msg_win_dynamic_append(err_log, "Could not open FPGA connection");
+            }
+            break;
+        }
         case CMD_DUMMY: {
             dummy *d = malloc(sizeof(dummy));
             d->colour = dummy_col++;
@@ -205,8 +294,8 @@ void got_rl_line(char *str) {
             
             //Actually send the command
             unsigned cmd_addr = (dbg_guv_addr << 4) | cmd.reg;
-            queue_write(&FIX_THIS->egress, (char*) &cmd_addr, sizeof(cmd_addr));
-            if (cmd.has_param) queue_write(&FIX_THIS->egress, (char*) &cmd.param, sizeof(cmd.param));
+            queue_write(&g->parent->egress, (char*) &cmd_addr, sizeof(cmd_addr));
+            if (cmd.has_param) queue_write(&g->parent->egress, (char*) &cmd.param, sizeof(cmd.param));
             break;
         }
         default: {
@@ -219,62 +308,6 @@ void got_rl_line(char *str) {
     }
     
     free(str);
-}
-
-void callback(new_fpga_cb_info info) {
-    #ifdef DEBUG_ON
-    fprintf(stderr, "Callback called! f = %p\n", info.f);
-    fflush(stderr);
-    #endif
-    fpga_connection_info *f = info.f;
-    if (f == NULL) {
-        char line[80];
-        sprintf(line, "Could not connect to FPGA: %s", info.error_str);
-        char *old = msg_win_append(err_log, strdup(line));
-        if (old != NULL) free(old);
-        return;
-    }
-    FIX_THIS = f;
-    
-    dbg_guv *g = &f->guvs[0];
-    dbg_guv_set_name(g, "FIZZCNT");
-    
-    if (t != NULL) {
-        pthread_mutex_lock(&t_mutex);
-        int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
-        if (rc < 0) {
-            char line[80];
-            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
-            char *old = msg_win_append(err_log, strdup(line));
-            if (old != NULL) free(old);
-        } 
-        pthread_mutex_unlock(&t_mutex);
-    }
-    
-    dbg_guv *h = &f->guvs[1];
-    dbg_guv_set_name(h, "FIZZBUZZ");
-    
-    if (t != NULL) {
-        pthread_mutex_lock(&t_mutex);
-        int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
-        if (rc < 0) {
-            char line[80];
-            sprintf(line, "Could not add FIZZBUZZ to tree: %s", t->error_str);
-            char *old = msg_win_append(err_log, strdup(line));
-            if (old != NULL) free(old);
-        }
-        pthread_mutex_unlock(&t_mutex);
-    }
-    
-    pollfd_array *p = (pollfd_array *)info.user_data;
-    int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
-    if (rc < 0) {
-        char line[80];
-        sprintf(line, "Could not add new connection to pollfd array: %s", p->error_str);
-        char *old = msg_win_append(err_log, strdup(line));
-        if (old != NULL) free(old);
-        return;
-    }
 }
 
 //Don't forget: callbacks for when SIGWINCH is signalled
@@ -300,8 +333,8 @@ int main(int argc, char **argv) {
     pthread_t prod;
     pthread_create(&prod, NULL, producer, &q);
     
-    pollfd_array *pfd_arr = new_pollfd_array(16);
-    new_fpga_connection(callback, argc > 1 ? argv[1] : "localhost", argc > 2 ? argv[2] : "5555", pfd_arr);
+    pfd_arr = new_pollfd_array(16);
+    //new_fpga_connection(callback, argc > 1 ? argv[1] : "localhost", argc > 2 ? argv[2] : "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
     
@@ -419,10 +452,6 @@ int main(int argc, char **argv) {
             //a read call. We have no choice but to cancel them; I should find
             //a way to fix this...
             pthread_cancel(prod);
-            
-            //Cross your fingers that this works!
-            del_fpga_connection(FIX_THIS);
-            FIX_THIS = NULL;
             break;
         } else {
             ansi_code[ansi_code_pos++] = c;
@@ -595,6 +624,14 @@ int main(int argc, char **argv) {
         cur = next;
     }
     
+    fci_list *f = fci_head.next;
+    while (f != &fci_head) {
+        fci_list *next = f->next;
+        del_fpga_connection(f->f);
+        free(f);
+        f = next;
+    }
+    
     free_msg_win_logs(err_log);
     del_msg_win(err_log);
     
@@ -603,7 +640,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Joined prod\n");
 #endif
     
-    del_fpga_connection(FIX_THIS);
     clean_screen();
     return 0;
 }
