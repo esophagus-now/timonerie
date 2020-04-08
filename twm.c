@@ -1594,8 +1594,8 @@ void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn) {
                 t->error_str = TWM_INVALID_TREE;
                 return NULL;
             }
-            t->focus->has-focus = 1;
-            if (t->focus->type != LEAF) {
+            t->focus->has_focus = 1;
+            if (t->focus->type != TWM_LEAF) {
                 //This violates the tree invariant
                 t->error_str = TWM_INVALID_TREE;
                 return NULL;
@@ -1628,7 +1628,7 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
         return -1;
     }
     
-    if (t->type == LEAF && t->item == item) {
+    if (t->type == TWM_LEAF && t->item == item) {
         //Delete this node. For reasons I won't get into, to do that we must
         //find its parent
         twm_node *parent = t->parent;
@@ -1641,7 +1641,7 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
         }
         
         int ind = twm_node_indexof(t, parent);
-        if (ind < 0) {
+        if (ind < 0) {
             //Propagate error
             tree->error_str = parent->error_str;
             return -1;
@@ -1711,7 +1711,7 @@ static twm_node* find_item(twm_tree *tree, twm_node *t, void *item) {
         return NULL;
     }
     
-    if (t->type == LEAF && t->item == item) {
+    if (t->type == TWM_LEAF && t->item == item) {
         return t;
     } else {
         //Recursively search children

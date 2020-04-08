@@ -22,13 +22,15 @@
     X(UNUSED_13        ),\
     X(UNUSED_14        ),\
     X(LATCH            ),\
-    /*These next commands are for timonerie rather than a dbg_guv*/\
+
+#define DBG_CMD_IDENTS \
     X(CMD_DUMMY),\
     X(CMD_OPEN),\
     X(CMD_CLOSE),\
     X(CMD_SEL),\
     X(CMD_DESEL),\
     X(CMD_NAME),\
+    X(CMD_DBG_REG),\
     X(CMD_SHOW),\
     X(CMD_HIDE),\
     X(CMD_UP),\
@@ -40,12 +42,20 @@
     
 
 #define X(x) x
-typedef enum _dbg_cmd_type {
+typedef enum _dbg_reg_type {
     DBG_GUV_REG_IDENTS
-} dbg_cmd_type;
+} dbg_reg_type;
 #undef X
 
 extern char const *DBG_GUV_REG_NAMES[];
+
+#define X(x) x
+typedef enum _dbg_cmd_type {
+    DBG_CMD_IDENTS
+} dbg_cmd_type;
+#undef X
+
+extern char const *DBG_CMD_NAMES[];
 
 #define MAX_STR_PARAM_SIZE 64
 typedef struct _dbg_cmd {
@@ -53,10 +63,10 @@ typedef struct _dbg_cmd {
     
     //Fields used by parsed command. The ones which are used depends on the
     //dbg_cmd_type
+    dbg_reg_type reg;
     char id[MAX_STR_PARAM_SIZE + 1]; //Identifier
     unsigned dbg_guv_addr;
     int has_guv_addr; //The "sel" command can be fore an FPGA or a dbg_guv
-    unsigned reg_addr;
     int has_param; //Some dbg_guv register commadns have a parameter, and some don't
     unsigned param;
     char node[MAX_STR_PARAM_SIZE + 1]; //The hostname...

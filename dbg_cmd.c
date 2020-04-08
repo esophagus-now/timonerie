@@ -14,15 +14,12 @@ char const *DBG_GUV_REG_NAMES[] = {
 };
 #undef X
 
-char const *const DBG_CMD_SUCCESS            = "successfully parsed dbg_guv cmd";
-char const *const DBG_CMD_ADDR_RANGE        = "dbg_guv address out of range";
-char const *const DBG_CMD_BAD_REG            = "Bad register code";
-char const *const DBG_CMD_EXP_OP            = "Expected another operand";
-char const *const DBG_CMD_TOO_MANY_OPS        = "Too many operands given";
-char const *const DBG_CMD_UNEX                = "Unexpected character";
-char const *const DBG_CMD_BAD_PARAM            = "Malformed parameter value";
-char const *const DBG_CMD_NULL_PTR            = "NULL pointer passed to dbg_cmd parse";
-char const *const DBG_CMD_IMPOSSIBLE        = "The dbg_cmd code somehow reached an area Marco thought was impossible";
+
+#define X(x) #x
+char const *DBG_CMD_NAMES[] = {
+    DBG_CMD_IDENTS
+};
+#undef X
 
 //Functions for each terminal in the grammar
 //Each returns the number of bytes read from str. On error, return -1 and
@@ -129,13 +126,13 @@ static int parse_action(dbg_cmd *dest, char const *str) {
     num_read++;
     switch (*str++) {
     case 'c':
-        dest->type = LATCH;
+        dest->reg = LATCH;
         dest->has_param = 0;
         dest->error_str = DBG_CMD_SUCCESS;
         return num_read;
     case 'p':
     case 'P':
-        dest->type = KEEP_PAUSING;
+        dest->reg = KEEP_PAUSING;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -143,7 +140,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         dest->error_str = DBG_CMD_SUCCESS;
         return num_read;
     case 'l':
-        dest->type = LOG_CNT;
+        dest->reg = LOG_CNT;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -151,7 +148,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         dest->error_str = DBG_CMD_SUCCESS;
         return num_read;
     case 'L':
-        dest->type = KEEP_LOGGING;
+        dest->reg = KEEP_LOGGING;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -159,7 +156,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         dest->error_str = DBG_CMD_SUCCESS;
         return num_read;
     case 'd':
-        dest->type = DROP_CNT;
+        dest->reg = DROP_CNT;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -167,7 +164,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         dest->error_str = DBG_CMD_SUCCESS;
         return num_read;
     case 'D':
-        dest->type = KEEP_DROPPING;
+        dest->reg = KEEP_DROPPING;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -190,7 +187,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
     switch (*str++) {
     case 'd':
     case 'D':
-        dest->type = INJ_TDATA;
+        dest->reg = INJ_TDATA;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -199,7 +196,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         return num_read;
     case 'v':
     case 'V':
-        dest->type = INJ_TVALID;
+        dest->reg = INJ_TVALID;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -208,7 +205,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         return num_read;
     case 'k':
     case 'K':
-        dest->type = INJ_TKEEP;
+        dest->reg = INJ_TKEEP;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -217,7 +214,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         return num_read;
     case 'l':
     case 'L':
-        dest->type = INJ_TLAST;
+        dest->reg = INJ_TLAST;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -226,7 +223,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         return num_read;
     case 't':
     case 'T':
-        dest->type = INJ_TDEST;
+        dest->reg = INJ_TDEST;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -235,7 +232,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
         return num_read;
     case 'i':
     case 'I':
-        dest->type = INJ_TID;
+        dest->reg = INJ_TID;
         rc = parse_param(dest, str);
         if (rc < 0) return -1; //parse_param has already set error_str
         num_read += rc;
@@ -453,6 +450,7 @@ static int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str) {
     if (rc < 0) return -1; //parse_eos already set dest->error_str
     str += rc;
     
+    dest->type = CMD_DBG_REG;
     dest->error_str = DBG_CMD_SUCCESS;
     return 0;
 }
@@ -479,6 +477,7 @@ static int parse_##CMD (dbg_cmd *dest, char const *str) { \
 struct dbg_cmd_unused ## __LINE__ {} 
 
 //^^That last line is an UNFORGIVABLE hack to swallow the semicolon
+make_simple_parse_fn(CMD_DUMMY);
 make_simple_parse_fn(CMD_DESEL);
 make_simple_parse_fn(CMD_SHOW);
 make_simple_parse_fn(CMD_HIDE);
@@ -495,11 +494,12 @@ typedef struct _cmd_info {
 } cmd_info;
 
 static cmd_info builtin_cmds[] = {
+    {"dummy",   parse_CMD_DUMMY},      //Just for testing
     {"open",	parse_open_cmd},	   //Open FPGA connection
     {"close",	parse_close_cmd}	   //Close FPGA connection
     {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
     {"desel",	parse_CMD_DESEL},      //De-select active dbg_guv
-    {";",	    parse_open_cmd},	   //Issue a command to active dbg_guv
+    {";",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
     {"name",	parse_name_cmd},	   //Rename active dbg_guv
     {"show",	parse_CMD_SHOW},	   //Show active dbg_guv
     {"hide",	parse_CMD_HIDE},	   //Hide active dbg_guv
@@ -507,8 +507,11 @@ static cmd_info builtin_cmds[] = {
     {"r",	    parse_CMD_RIGHT},	   //Move active dbg_guv to the right
     {"u",	    parse_CMD_UP},	       //Move active dbg_guv up
     {"d",	    parse_CMD_DOWN},	   //Move active dbg_guv down
-    {"quit",    parse_CMD_QUIT}        //End timonerie session
+    {"quit",    parse_CMD_QUIT},       //End timonerie session
+    {"quit",    parse_CMD_INFO}        //Show information about selected guv
+    //Command for deleting a name?
 };
+#define num_builtin_cmds (sizeof(builtin_cmds)/sizeof(*builtin_cmds))
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
@@ -522,33 +525,50 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    
     //Check which command this is
+    int num_read;
     char cmd[16];
-    sscanf(str, "%15s", cmd);
-    //For now, check for special dummy command
-    if (!strcmp(cmd, "dummy")) {
-        dest->type = CMD_DUMMY;
-        return 0;
+    int rc = sscanf(str, "%15s%n", cmd, &num_read);
+    if (rc < 1) {
+        dest->error_str = DBG_CMD_EXP_OP;
+        return -1;
     }
+    str += num_read;
     
-    int rc = parse_dbg_guv_addr(dest, str);
-    if (rc < 0) return -1; //parse_dbg_guv_addr already set dest->error_str
-    str += rc;
-    
-    rc = parse_action(dest, str);
-    if (rc < 0) return -1; //parse_action already set dest->error_str
-    str += rc;
-    
-    rc = parse_eos(dest, str);
-    if (rc < 0) return -1; //parse_eos already set dest->error_str
-    str += rc;
-    
-    
-    //At this point, all the parsing succeeded. Compute the actual code that
-    //should be sent to the dbg_guv's command stream:
-    dest->addr = (dest->dbg_guv_addr << 4) | dest->type;
-    //dest->param is already set
-    dest->error_str = DBG_CMD_SUCCESS;
-    return 0;
+    //Do a boring old linear search. Slow, but who cares?
+    int i;
+    for (i = 0; i < num_builtin_cmds; i++) {
+        if(!strcmp(cmd, builtin_cmds[i].cmd)) {
+            rc = builtin_cmds[i].fn(dest, str);
+            if (rc < 0) {
+                return -1; //dest->error_str already set
+            }
+            
+            return 0;
+        }
+    }
+   
+    dest->error_str = DBG_CMD_BAD_CMD;
+    return -1;
 }
+
+
+//////////////////////////////////////////////////
+//Error codes, which double as printable strings//
+//////////////////////////////////////////////////
+
+//Does this make you seasick? 
+char const *const DBG_CMD_SUCCESS   = "successfully parsed dbg_guv cmd";
+char const *const DBG_CMD_ADDR_RANGE   = "dbg_guv address out of range";
+char const *const DBG_CMD_BAD_REG     = "Bad register code";
+char const *const DBG_CMD_EXP_OP      = "Expected another operand";
+char const *const DBG_CMD_TOO_MANY_OPS    = "Too many operands given";
+char const *const DBG_CMD_UNEX      = "Unexpected character";
+char const *const DBG_CMD_BAD_PARAM     = "Malformed parameter value";
+char const *const DBG_CMD_NULL_PTR        = "NULL pointer passed to dbg_cmd parse";
+char const *const DBG_CMD_IMPOSSIBLE         = "The dbg_cmd code somehow reached an area Marco thought was impossible";
+char const *const DBG_CMD_NOT_IMPL        = "This function is not implement";
+char const *const DBG_CMD_REDEF        = "Identifier is already in use";
+char const *const DBG_CMD_BAD_CMD          = "No such command";
+char const *const DBG_CMD_OPEN_USAGE         = "Usage: open fpga_name hostname port";
+char const *const DBG_CMD_SEL_USAGE      = "Usage: sel (fpga_name[guv_addr] | guv_name)";

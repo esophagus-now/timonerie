@@ -147,7 +147,8 @@ void got_rl_line(char *str) {
         
         add_history(str);
         
-        if (cmd.type == DUMMY) {
+        switch(cmd.type) {
+        case CMD_DUMMY: {
             dummy *d = malloc(sizeof(dummy));
             d->colour = dummy_col++;
             if (dummy_col == 47) dummy_col = 40;
@@ -157,65 +158,74 @@ void got_rl_line(char *str) {
             twm_tree_add_window(t, d, dummy_ops);
             return;
         }
-        
-        if (f == NULL) {
+        case CMD_DBG_REG: {
+            if (f == NULL) {
+                cursor_pos(1, term_rows-1);
+                sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", &len);
+                write(1, line, len);
+                return;
+            } else {
+                cursor_pos(1, term_rows-1);
+                if (cmd.reg == LATCH) {
+                    sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
+                        cmd.dbg_guv_addr,
+                        &len
+                    );
+                    #ifdef DEBUG_ON
+                    num_poll_logs = 0;
+                    #endif
+                } else {
+                    sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
+                        cmd.param, 
+                        cmd.param,
+                        cmd.dbg_guv_addr,
+                        DBG_GUV_REG_NAMES[cmd.reg],
+                        &len
+                    );
+                }
+                write(1, line, len);
+            }
+            
+            dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
+            //Seems silly to do yet another switch statement after the one in
+            //parse_dbg_cmd... but anyway, it decouples the two bits of code
+            //so it's easier for me to change it later if I have to
+            
+            //These are the only fields not updated by the command receipt
+            switch (cmd.reg) {
+            case DROP_CNT:
+                g->drop_cnt = cmd.param;
+                break;
+            case LOG_CNT:
+                g->log_cnt = cmd.param;
+                break;
+            case INJ_TDATA:
+                g->inj_TDATA = cmd.param;
+                break;
+            case INJ_TLAST:
+                g->inj_TLAST = cmd.param;
+                break;
+            case DUT_RESET:
+                g->dut_reset = cmd.param;
+                break;
+            default:
+                //Just here to get rid of warning for not using everything in the enum
+                break;
+            }
+            
+            //Actually send the command
+            unsigned cmd_addr = (cmd.dbg_guv_addr << 4) | cmd.reg;
+            queue_write(&f->egress, (char*) &cmd_addr, sizeof(cmd_addr));
+            if (cmd.has_param)
+                queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
+        }
+        }
+        default: {
             cursor_pos(1, term_rows-1);
-            sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", &len);
+            sprintf(line, "Received a %s command" ERASE_TO_END "%n", DBG_CMD_NAMES[cmd.type], &len);
             write(1, line, len);
             return;
-        } else {
-            cursor_pos(1, term_rows-1);
-            if (cmd.type == LATCH) {
-                sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
-                    cmd.dbg_guv_addr,
-                    &len
-                );
-                #ifdef DEBUG_ON
-                num_poll_logs = 0;
-                #endif
-            } else {
-                sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
-                    cmd.param, 
-                    cmd.param,
-                    cmd.dbg_guv_addr,
-                    DBG_GUV_REG_NAMES[cmd.type],
-                    &len
-                );
-            }
-            write(1, line, len);
         }
-        
-        dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
-        //Seems silly to do yet another switch statement after the one in
-        //parse_dbg_cmd... but anyway, it decouples the two bits of code
-        //so it's easier for me to change it later if I have to
-        
-        //These are the only fields not updated by the command receipt
-        switch (cmd.type) {
-        case DROP_CNT:
-            g->drop_cnt = cmd.param;
-            break;
-        case LOG_CNT:
-            g->log_cnt = cmd.param;
-            break;
-        case INJ_TDATA:
-            g->inj_TDATA = cmd.param;
-            break;
-        case INJ_TLAST:
-            g->inj_TLAST = cmd.param;
-            break;
-        case DUT_RESET:
-            g->dut_reset = cmd.param;
-            break;
-        default:
-            //Just here to get rid of warning for not using everything in the enum
-            break;
-        }
-        
-        //Actually send the command
-        queue_write(&f->egress, (char*) &cmd.addr, sizeof(cmd.addr));
-        if (cmd.has_param)
-            queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
     }
     
     free(str);
