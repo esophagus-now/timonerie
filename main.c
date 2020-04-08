@@ -159,37 +159,32 @@ void got_rl_line(char *str) {
             return;
         }
         case CMD_DBG_REG: {
-            if (f == NULL) {
+            int dbg_guv_addr;
+            dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+            if (g == NULL) {
                 cursor_pos(1, term_rows-1);
-                sprintf(line, "FPGA connection is not open" ERASE_TO_END "%n", &len);
+                sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
                 return;
-            } else {
-                cursor_pos(1, term_rows-1);
-                if (cmd.reg == LATCH) {
-                    sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
-                        cmd.dbg_guv_addr,
-                        &len
-                    );
-                    #ifdef DEBUG_ON
-                    num_poll_logs = 0;
-                    #endif
-                } else {
-                    sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
-                        cmd.param, 
-                        cmd.param,
-                        cmd.dbg_guv_addr,
-                        DBG_GUV_REG_NAMES[cmd.reg],
-                        &len
-                    );
-                }
-                write(1, line, len);
-            }
+            } 
+            dbg_guv_addr = g->addr;
             
-            dbg_guv *g = &f->guvs[cmd.dbg_guv_addr];
-            //Seems silly to do yet another switch statement after the one in
-            //parse_dbg_cmd... but anyway, it decouples the two bits of code
-            //so it's easier for me to change it later if I have to
+            cursor_pos(1, term_rows-1);
+            if (cmd.reg == LATCH) {
+                sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
+                    dbg_guv_addr,
+                    &len
+                );
+            } else {
+                sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
+                    cmd.param, 
+                    cmd.param,
+                    dbg_guv_addr,
+                    DBG_GUV_REG_NAMES[cmd.reg],
+                    &len
+                );
+            }
+            write(1, line, len);
             
             //These are the only fields not updated by the command receipt
             switch (cmd.reg) {
@@ -214,10 +209,12 @@ void got_rl_line(char *str) {
             }
             
             //Actually send the command
-            unsigned cmd_addr = (cmd.dbg_guv_addr << 4) | cmd.reg;
+            unsigned cmd_addr = (dbg_guv_addr << 4) | cmd.reg;
             queue_write(&f->egress, (char*) &cmd_addr, sizeof(cmd_addr));
             if (cmd.has_param)
                 queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
+            
+            break;
         }
         default: {
             cursor_pos(1, term_rows-1);

@@ -103,6 +103,8 @@ extern char const *const DBG_CMD_NOT_IMPL        ; //    = "This function is not
 extern char const *const DBG_CMD_REDEF        ; //    = "Identifier is already in use";
 extern char const *const DBG_CMD_BAD_CMD        ; //    = "No such command";
 extern char const *const DBG_CMD_OPEN_USAGE        ; //    = "Usage: open fpga_name hostname port";
+extern char const *const DBG_CMD_CLOSE_USAGE        ; //    = "Usage: close fpga_name";
 extern char const *const DBG_CMD_SEL_USAGE        ; //    = "Usage: sel (fpga_name[guv_addr] | guv_name)";
+extern char const *const DBG_CMD_NAME_USAGE        ; //    = "Usage: name guv_name";
 
 #endif

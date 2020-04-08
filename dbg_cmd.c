@@ -334,7 +334,7 @@ static int parse_close_cmd(dbg_cmd *dest, char const *str) {
     );
     
     if (rc != 1) {
-        dest->error_str = DBG_CMD_OPEN_USAGE;
+        dest->error_str = DBG_CMD_CLOSE_USAGE;
         return -1;
     }
     
@@ -420,7 +420,7 @@ static int parse_name_cmd(dbg_cmd *dest, char const *str) {
     );
     
     if (rc != 1) {
-        dest->error_str = DBG_CMD_OPEN_USAGE;
+        dest->error_str = DBG_CMD_NAME_USAGE;
         return -1;
     }
     
@@ -504,7 +504,7 @@ static cmd_info builtin_cmds[] = {
     {"close",	parse_close_cmd},	   //Close FPGA connection
     {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
     {"desel",	parse_CMD_DESEL},      //De-select active dbg_guv
-    {";",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
+    {"set",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
     {"name",	parse_name_cmd},	   //Rename active dbg_guv
     {"show",	parse_CMD_SHOW},	   //Show active dbg_guv
     {"hide",	parse_CMD_HIDE},	   //Hide active dbg_guv
@@ -530,14 +530,33 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
+    int num_read = skip_whitespace(dest, str);
+    if (num_read < 0) {
+        return -1; //dest->error_str already set
+    }
+    str += num_read;
+    
+    //Special case: don't use %s to parse ';' command
+    if (*str == ';') {
+        str++;
+        int rc = parse_dbg_reg_cmd(dest, str);
+        if (rc < 0) {
+            return -1; //dest->error_str already set
+        } else {
+            dest->error_str = DBG_CMD_SUCCESS;
+            return 0;
+        }
+    }
+    
     //Check which command this is
-    int num_read;
     char cmd[16];
     int rc = sscanf(str, "%15s%n", cmd, &num_read);
     if (rc < 1) {
         dest->error_str = DBG_CMD_EXP_OP;
         return -1;
     }
+    
+    
     str += num_read;
     
     //Do a boring old linear search. Slow, but who cares?
@@ -576,4 +595,6 @@ char const *const DBG_CMD_NOT_IMPL        = "This function is not implement";
 char const *const DBG_CMD_REDEF        = "Identifier is already in use";
 char const *const DBG_CMD_BAD_CMD          = "No such command";
 char const *const DBG_CMD_OPEN_USAGE         = "Usage: open fpga_name hostname port";
+char const *const DBG_CMD_CLOSE_USAGE  = "Usage: close fpga_name";
 char const *const DBG_CMD_SEL_USAGE      = "Usage: sel (fpga_name[guv_addr] | guv_name)";
+char const *const DBG_CMD_NAME_USAGE          = "Usage: name guv_name";
