@@ -431,7 +431,7 @@ int main(int argc, char **argv) {
             int ready_for_input = 
                 (!copy_to_out || output_ready) &&
                 (!copy_to_log || log_ready) &&
-                !d.keep_pausing
+                (!d.keep_pausing || d.log_cnt > 0 || d.drop_cnt > 0) //Special case: the log_cnt or drop_cnt can disable pausing
             ;
             
             if (ready_for_input) {
