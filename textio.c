@@ -1018,6 +1018,11 @@ char* msg_win_append(msg_win *m, char *log) {
     return ret;
 }
 
+//Calls linebuf_append(&m->l, strdup(log)). Any old logs are freed.
+void msg_win_dynamic_append(msg_win *m, char const *log) {
+    char *old = msg_win_append(m, strdup(log));
+    if (old) free(old);
+}
 
 //Returns number of bytes added into buf, or -1 on error.
 int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {        

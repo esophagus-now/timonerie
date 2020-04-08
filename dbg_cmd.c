@@ -38,6 +38,26 @@ char const *const DBG_CMD_IMPOSSIBLE        = "The dbg_cmd code somehow reached 
 //Each returns the number of bytes read from str. On error, return -1 and
 //set dest->error_str appropriately
 
+static int skip_whitespace(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    int num_read = 0;
+    
+    //Skip over whitespace
+    while (isspace(*str)) {
+        str++;
+        num_read++;
+    }
+    
+    return num_read;
+}
+
 static int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
@@ -111,13 +131,9 @@ static int parse_action(dbg_cmd *dest, char const *str) {
     
     int num_read = 0;
     
-    //Skip over whitespace
-    while (isspace(*str)) {
-        str++;
-        num_read++;
-    }
-    
-    int rc;
+    int rc = skip_whitespace(dest, str);
+    num_read += rc;
+    str += rc;
     
     //Nothing can be done at this point; need to use ugly switch statement
     num_read++;
@@ -273,6 +289,119 @@ static int parse_eos (dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
+static int parse_open_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    int num_read;
+    int rc = sscanf(str, "%*s%*s%*s%n", 
+        MAX_STR_PARAM_SIZE, dest->id,
+        MAX_STR_PARAM_SIZE, dest->node,
+        MAX_STR_PARAM_SIZE, dest->serv,
+        &num_read
+    );
+    
+    if (rc != 3) {
+        dest->error_str = DBG_CMD_OPEN_USAGE;
+        return -1;
+    }
+    
+    str += num_read;
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) {
+        return -1; //dest->error_str already set
+    }
+    num_read += rc;
+    
+    dest->type = CMD_OPEN;
+    dest->error_str = DBG_CMD_SUCCESS;
+    return num_read;
+}
+
+static int parse_close_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    int num_read;
+    int rc = sscanf(str, "%*s%n", 
+        MAX_STR_PARAM_SIZE, dest->id,
+        &num_read
+    );
+    
+    if (rc != 1) {
+        dest->error_str = DBG_CMD_OPEN_USAGE;
+        return -1;
+    }
+    
+    str += num_read;
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) {
+        return -1; //dest->error_str already set
+    }
+    num_read += rc;
+    
+    dest->type = CMD_CLOSE;
+    dest->error_str = DBG_CMD_SUCCESS;
+    return num_read;
+}
+
+static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    int num_read = 0;
+    int incr;
+    int rc = sscanf(str, "%*s%n", 
+        MAX_STR_PARAM_SIZE, dest->id,
+        &incr
+    );
+    
+    if (rc != 1) {
+        dest->error_str = DBG_CMD_OPEN_USAGE;
+        return -1;
+    }
+    
+    num_read += incr;
+    str += incr;
+    
+    rc = skip_whitespace(dest, str);
+    num_read += rc;
+    str += rc;
+    
+    if (*str == '[') {
+        str++;
+        //This is an fpga[guv_addr] command
+        sscanf(str, "
+    }
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) {
+        return -1; //dest->error_str already set
+    }
+    num_read += rc;
+    
+    dest->type = CMD_CLOSE;
+    dest->error_str = DBG_CMD_SUCCESS;
+    return num_read;
+}
+
 //Just for syntax
 typedef struct _cmd_info {
     char *cmd;
@@ -312,7 +441,7 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
     sscanf(str, "%15s", cmd);
     //For now, check for special dummy command
     if (!strcmp(cmd, "dummy")) {
-        dest->type = DUMMY;
+        dest->type = CMD_DUMMY;
         return 0;
     }
     

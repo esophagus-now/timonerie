@@ -8,8 +8,6 @@
  * By the way, I don't expect the user to have more than 200 symbols at any
  * one time, so I also don't care to much about space.
  * */
- 
-#include "pollfd_array.h"
 
 #define MAX_SYM_SIZE 64
 #define MAX_SYM_DATA 64

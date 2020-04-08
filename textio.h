@@ -261,6 +261,9 @@ void msg_win_set_name(msg_win *m, char *name);
 //Finally, a redraw is triggered,
 char* msg_win_append(msg_win *m, char *log);
 
+//Calls linebuf_append(&m->l, strdup(log)). Any old logs are freed.
+void msg_win_dynamic_append(msg_win *m, char const *log);
+
 //Returns number of bytes added into buf, or -1 on error.
 int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf);
 
