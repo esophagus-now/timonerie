@@ -361,9 +361,9 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
     } 
     
     
-    int rc = skip_whitespace(dest, str);
-    int num_read = rc;
-    str += rc;
+    int incr = skip_whitespace(dest, str);
+    int num_read = incr;
+    str += incr;
     
     //Try scanning identifier
     //I couldn't get sscanf to do what I needed, so I coded up this dinky
@@ -388,7 +388,7 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
         str++;
         //This is an fpga[guv_addr] command
         //Try parsing dbg_guv address
-        int incr = parse_dbg_guv_addr(dest, str);
+        incr = parse_dbg_guv_addr(dest, str);
         if (incr < 0) {
             return -1; //dest->error_str already set
         }
@@ -397,11 +397,22 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
         str += incr;
     }
     
-    rc = parse_eos(dest, str);
-    if (rc < 0) {
+    incr = skip_whitespace(dest, str);
+    num_read += incr;
+    str += incr;
+    
+    //Eat closing square bracket if one was given. I won't complain to much
+    //if no one gives it, though
+    if (*str == ']') {
+        str++;
+        num_read++;
+    }
+    
+    incr = parse_eos(dest, str);
+    if (incr < 0) {
         return -1; //dest->error_str already set
     }
-    num_read += rc;
+    num_read += incr;
     
     dest->type = CMD_SEL;
     dest->error_str = DBG_CMD_SUCCESS;

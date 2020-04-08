@@ -1630,30 +1630,34 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
         return -1;
     }
     
-    if (t->type == TWM_LEAF && t->item == item) {
-        //Delete this node. For reasons I won't get into, to do that we must
-        //find its parent
-        twm_node *parent = t->parent;
-        if (parent == NULL) {
-            //This is the root of the tree (but double-check)
-            if (tree->head != t) {
-                tree->error_str = TWM_INVALID_TREE;
+    if (t->type == TWM_LEAF) {
+        if (t->item == item) {
+            //Delete this node. For reasons I won't get into, to do that we must
+            //find its parent
+            twm_node *parent = t->parent;
+            if (parent == NULL) {
+                //This is the root of the tree (but double-check)
+                if (tree->head != t) {
+                    tree->error_str = TWM_INVALID_TREE;
+                    return -1;
+                }
+            }
+            
+            int ind = twm_node_indexof(t, parent);
+            if (ind < 0) {
+                //Propagate error
+                tree->error_str = parent->error_str;
                 return -1;
             }
-        }
-        
-        int ind = twm_node_indexof(t, parent);
-        if (ind < 0) {
-            //Propagate error
-            tree->error_str = parent->error_str;
-            return -1;
-        }
-        
-        int rc = twm_remove_node(tree, parent, ind);
-        if (rc == 0) {
-            return 1; //Searched and destroyed
+            
+            int rc = twm_remove_node(tree, parent, ind);
+            if (rc == 0) {
+                return 1; //Searched and destroyed
+            } else {
+                return rc; //tree->error_str already set
+            }
         } else {
-            return rc; //tree->error_str already set
+            return 0; //Not found, but no error
         }
     } else {
         //Recurse on each of the children
@@ -1713,30 +1717,35 @@ static twm_node* find_item(twm_tree *tree, twm_node *t, void *item) {
         return NULL;
     }
     
-    if (t->type == TWM_LEAF && t->item == item) {
-        return t;
+    if (t->type == TWM_LEAF) {
+        if (t->item == item) {
+            return t;
+        } else {
+            tree->error_str = TWM_NOT_FOUND;
+            return NULL;
+        }
     } else {
         //Recursively search children
         if (t->num_children < 1) {
-            t->error_str = TWM_INVALID_TREE;
+            tree->error_str = TWM_INVALID_TREE;
             return NULL;
         }
         
         int i;
         for (i = 0; i < t->num_children; i++) {
             twm_node *res = find_item(tree, t->children[i], item);
-            if (res == NULL && t->error_str != TWM_NOT_FOUND) {
+            if (res == NULL && tree->error_str != TWM_NOT_FOUND) {
                 return NULL; //An error happened
             } else if (res != NULL) {
                 return res; //Found it!
             }
         }
         
-        t->error_str = TWM_NOT_FOUND;
+        tree->error_str = TWM_NOT_FOUND;
         return NULL;
     }
     
-    t->error_str = TWM_IMPOSSIBLE;
+    tree->error_str = TWM_IMPOSSIBLE;
     return NULL;
 }
 

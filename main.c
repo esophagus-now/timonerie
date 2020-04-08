@@ -166,7 +166,6 @@ void callback(new_fpga_cb_info info) {
         char line[120];
         sprintf(line, "Connection [%s] opened", e->sym);
         msg_win_dynamic_append(err_log, line);
-        return;
     }
     
     fci_list *n = malloc(sizeof(fci_list));
@@ -218,7 +217,6 @@ void callback(new_fpga_cb_info info) {
     }
     
     sym_dat(e, sem_val*)->type = SYM_FCI;
-    sym_dat(e, sem_val*)->v = f;
     sym_dat(e, sem_val*)->v = f;
 }
 
