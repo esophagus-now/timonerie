@@ -306,6 +306,30 @@ void got_rl_line(char *str) {
             
             break;
         }
+        case CMD_MSG: {
+            int rc = twm_tree_focus_item(t, err_log);
+            if (t->error_str == TWM_NOT_FOUND) {
+                int rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
+                if (rc < 0) {
+                    //For once I won't put it in the message window, since
+                    //the user wouldn't see it!
+                    char line[80];
+                    int len;
+                    sprintf(line, "Could not show message window: %s" ERASE_TO_END "%n", t->error_str, &len);
+                    write(STDOUT_FILENO, line, len);
+                    break;
+                }
+            } else if (rc < 0) {
+                //For once I won't put it in the message window, since
+                //the might not see it!
+                char line[80];
+                int len;
+                sprintf(line, "Could not focus message window: %s" ERASE_TO_END "%n", t->error_str, &len);
+                write(STDOUT_FILENO, line, len);
+                break;
+            }
+            break;
+        }
         case CMD_DUMMY: {
             dummy *d = malloc(sizeof(dummy));
             d->colour = dummy_col++;

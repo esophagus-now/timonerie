@@ -28,17 +28,10 @@
     X(CMD_OPEN),\
     X(CMD_CLOSE),\
     X(CMD_SEL),\
-    X(CMD_DESEL),\
     X(CMD_NAME),\
     X(CMD_DBG_REG),\
-    X(CMD_SHOW),\
-    X(CMD_HIDE),\
-    X(CMD_UP),\
-    X(CMD_DOWN),\
-    X(CMD_LEFT),\
-    X(CMD_RIGHT),\
+    X(CMD_MSG),\
     X(CMD_QUIT),\
-    X(CMD_INFO),
     
 
 #define X(x) x

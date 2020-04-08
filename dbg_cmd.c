@@ -497,15 +497,8 @@ struct dbg_cmd_unused##CMD {}
 
 //^^That last line is an UNFORGIVABLE hack to swallow the semicolon
 make_simple_parse_fn(CMD_DUMMY);
-make_simple_parse_fn(CMD_DESEL);
-make_simple_parse_fn(CMD_SHOW);
-make_simple_parse_fn(CMD_HIDE);
-make_simple_parse_fn(CMD_UP);
-make_simple_parse_fn(CMD_DOWN);
-make_simple_parse_fn(CMD_LEFT);
-make_simple_parse_fn(CMD_RIGHT);
+make_simple_parse_fn(CMD_MSG);
 make_simple_parse_fn(CMD_QUIT);
-make_simple_parse_fn(CMD_INFO);
 
 //Just for syntax
 typedef struct _cmd_info {
@@ -518,17 +511,10 @@ static cmd_info builtin_cmds[] = {
     {"open",	parse_open_cmd},	   //Open FPGA connection
     {"close",	parse_close_cmd},	   //Close FPGA connection
     {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
-    {"desel",	parse_CMD_DESEL},      //De-select active dbg_guv
     {"set",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
     {"name",	parse_name_cmd},	   //Rename active dbg_guv
-    {"show",	parse_CMD_SHOW},	   //Show active dbg_guv
-    {"hide",	parse_CMD_HIDE},	   //Hide active dbg_guv
-    {"l",	    parse_CMD_LEFT},	   //Move active dbg_guv to the left
-    {"r",	    parse_CMD_RIGHT},	   //Move active dbg_guv to the right
-    {"u",	    parse_CMD_UP},	       //Move active dbg_guv up
-    {"d",	    parse_CMD_DOWN},	   //Move active dbg_guv down
+    {"msg",	    parse_CMD_MSG},	       //Focus message window
     {"quit",    parse_CMD_QUIT},       //End timonerie session
-    {"info",    parse_CMD_INFO}        //Show information about selected guv
     //Command for deleting a name?
 };
 #define num_builtin_cmds (sizeof(builtin_cmds)/sizeof(*builtin_cmds))
