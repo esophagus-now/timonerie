@@ -1805,3 +1805,6 @@ char const *const TWM_OOM = "out of memory";
 char const *const TWM_OOB = "out of bounds";
 char const *const TWM_ILLEGAL_DELETE = "illegal node deletion";
 char const *const TWM_BAD_DEVELOPER = "Marco did not know what to do here";
+char const *const TWM_NOT_LEAF = "node is not a leaf";
+char const *const TWM_NO_FOCUS = "no focused node";
+char const *const TWM_TYPE_MISMATCH = "focused node is not of desired type";

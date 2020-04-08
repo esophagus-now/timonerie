@@ -70,7 +70,7 @@ typedef struct _dbg_cmd {
     int has_param; //Some dbg_guv register commadns have a parameter, and some don't
     unsigned param;
     char node[MAX_STR_PARAM_SIZE + 1]; //The hostname...
-    char *serv[MAX_STR_PARAM_SIZE + 1]; //...and port (service) number for opening connections
+    char serv[MAX_STR_PARAM_SIZE + 1]; //...and port (service) number for opening connections
     
     //Error information
     char const *error_str;

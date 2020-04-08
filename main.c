@@ -219,12 +219,12 @@ void got_rl_line(char *str) {
             if (cmd.has_param)
                 queue_write(&f->egress, (char*) &cmd.param, sizeof(cmd.param));
         }
-        }
         default: {
             cursor_pos(1, term_rows-1);
             sprintf(line, "Received a %s command" ERASE_TO_END "%n", DBG_CMD_NAMES[cmd.type], &len);
             write(1, line, len);
             return;
+        }
         }
     }
     

@@ -6,7 +6,8 @@
 #include "dbg_guv.h" //For MAX_GUVS_PER_FPGA
 #include "dbg_cmd.h"
 
-#define stringify(x) #x
+#define xstr(x) #x
+#define stringify(x) xstr(x)
 
 #define X(x) #x
 char const *DBG_GUV_REG_NAMES[] = {
@@ -288,10 +289,14 @@ static int parse_open_cmd(dbg_cmd *dest, char const *str) {
     } 
     
     int num_read;
-    int rc = sscanf(str, "%*s%*s%*s%n", 
-        MAX_STR_PARAM_SIZE, dest->id,
-        MAX_STR_PARAM_SIZE, dest->node,
-        MAX_STR_PARAM_SIZE, dest->serv,
+    int rc = sscanf(str, 
+        "%" stringify(MAX_STR_PARAM_SIZE) "s"
+        "%" stringify(MAX_STR_PARAM_SIZE) "s"
+        "%" stringify(MAX_STR_PARAM_SIZE) "s"
+        "%n", 
+        dest->id,
+        dest->node,
+        dest->serv,
         &num_read
     );
     
@@ -379,10 +384,9 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
         str++;
         //This is an fpga[guv_addr] command
         //Try parsing dbg_guv address
-        rc = sscanf(str, "%d]%n", &dest->dbg_guv_addr, &incr);
-        if (rc != 1) {
-            dest->error_str = DBG_CMD_OPEN_USAGE;
-            return -1;
+        incr = parse_dbg_guv_addr(dest, str);
+        if (incr < 0) {
+            return -1; //dest->error_str already set
         }
         
         num_read += incr;
@@ -442,7 +446,7 @@ static int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    rc = parse_action(dest, str);
+    int rc = parse_action(dest, str);
     if (rc < 0) return -1; //parse_action already set dest->error_str
     str += rc;
     
@@ -474,7 +478,7 @@ static int parse_##CMD (dbg_cmd *dest, char const *str) { \
     dest->error_str = DBG_CMD_SUCCESS; \
     return num_read; \
 } \
-struct dbg_cmd_unused ## __LINE__ {} 
+struct dbg_cmd_unused##CMD {} 
 
 //^^That last line is an UNFORGIVABLE hack to swallow the semicolon
 make_simple_parse_fn(CMD_DUMMY);
@@ -486,6 +490,7 @@ make_simple_parse_fn(CMD_DOWN);
 make_simple_parse_fn(CMD_LEFT);
 make_simple_parse_fn(CMD_RIGHT);
 make_simple_parse_fn(CMD_QUIT);
+make_simple_parse_fn(CMD_INFO);
 
 //Just for syntax
 typedef struct _cmd_info {
@@ -496,7 +501,7 @@ typedef struct _cmd_info {
 static cmd_info builtin_cmds[] = {
     {"dummy",   parse_CMD_DUMMY},      //Just for testing
     {"open",	parse_open_cmd},	   //Open FPGA connection
-    {"close",	parse_close_cmd}	   //Close FPGA connection
+    {"close",	parse_close_cmd},	   //Close FPGA connection
     {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
     {"desel",	parse_CMD_DESEL},      //De-select active dbg_guv
     {";",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
@@ -508,7 +513,7 @@ static cmd_info builtin_cmds[] = {
     {"u",	    parse_CMD_UP},	       //Move active dbg_guv up
     {"d",	    parse_CMD_DOWN},	   //Move active dbg_guv down
     {"quit",    parse_CMD_QUIT},       //End timonerie session
-    {"quit",    parse_CMD_INFO}        //Show information about selected guv
+    {"info",    parse_CMD_INFO}        //Show information about selected guv
     //Command for deleting a name?
 };
 #define num_builtin_cmds (sizeof(builtin_cmds)/sizeof(*builtin_cmds))
