@@ -27,9 +27,15 @@
     X(CMD_OPEN),\
     X(CMD_CLOSE),\
     X(CMD_SEL),\
+    X(CMD_DESEL),\
     X(CMD_NAME),\
     X(CMD_SHOW),\
-    X(CMD_HIDE)
+    X(CMD_HIDE),\
+    X(CMD_UP),\
+    X(CMD_DOWN),\
+    X(CMD_LEFT),\
+    X(CMD_RIGHT),\
+    X(CMD_QUIT),
     
 
 #define X(x) x
@@ -48,6 +54,7 @@ typedef struct _dbg_cmd {
     //dbg_cmd_type
     char id[MAX_STR_PARAM_SIZE + 1]; //Identifier
     unsigned dbg_guv_addr;
+    int has_guv_addr; //The "sel" command can be fore an FPGA or a dbg_guv
     unsigned reg_addr;
     int has_param; //Some dbg_guv register commadns have a parameter, and some don't
     unsigned param;

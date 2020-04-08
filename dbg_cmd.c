@@ -6,6 +6,8 @@
 #include "dbg_guv.h" //For MAX_GUVS_PER_FPGA
 #include "dbg_cmd.h"
 
+#define stringify(x) #x
+
 #define X(x) #x
 char const *DBG_GUV_REG_NAMES[] = {
     DBG_GUV_REG_IDENTS
@@ -334,8 +336,8 @@ static int parse_close_cmd(dbg_cmd *dest, char const *str) {
     } 
     
     int num_read;
-    int rc = sscanf(str, "%*s%n", 
-        MAX_STR_PARAM_SIZE, dest->id,
+    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
+        dest->id,
         &num_read
     );
     
@@ -366,10 +368,11 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
+    //Try parsing identifier
     int num_read = 0;
     int incr;
-    int rc = sscanf(str, "%*s%n", 
-        MAX_STR_PARAM_SIZE, dest->id,
+    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
+        dest->id,
         &incr
     );
     
@@ -388,7 +391,15 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
     if (*str == '[') {
         str++;
         //This is an fpga[guv_addr] command
-        sscanf(str, "
+        //Try parsing dbg_guv address
+        rc = sscanf(str, "%d]%n", &dest->dbg_guv_addr, &incr);
+        if (rc != 1) {
+            dest->error_str = DBG_CMD_OPEN_USAGE;
+            return -1;
+        }
+        
+        num_read += incr;
+        str += incr;
     }
     
     rc = parse_eos(dest, str);
@@ -401,6 +412,69 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
     dest->error_str = DBG_CMD_SUCCESS;
     return num_read;
 }
+
+static int parse_name_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    int num_read;
+    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
+        dest->id,
+        &num_read
+    );
+    
+    if (rc != 1) {
+        dest->error_str = DBG_CMD_OPEN_USAGE;
+        return -1;
+    }
+    
+    str += num_read;
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) {
+        return -1; //dest->error_str already set
+    }
+    num_read += rc;
+    
+    dest->type = CMD_NAME;
+    dest->error_str = DBG_CMD_SUCCESS;
+    return num_read;
+}
+
+//A lot of my commands just set dest->type and make sure no arguments were
+//given
+#define make_simple_parse_fn(CMD) \
+static int parse_##CMD (dbg_cmd *dest, char const *str) { \
+    /*Sanity check on inputs*/ \
+    if (dest == NULL) { \
+        return -2; \
+    } else if (str == NULL) { \
+        dest->error_str = DBG_CMD_NULL_PTR; \
+        return -1; \
+    } \
+    int num_read = parse_eos(dest, str); \
+    if (num_read < 0) { \
+        return -1; \
+    } \
+    dest->type = CMD ; \
+    dest->error_str = DBG_CMD_SUCCESS; \
+    return num_read; \
+} \
+struct dbg_cmd_unused ## __LINE__ {}
+//^^That last line is an UNFORGIVABLE hack to swallow the semicolon
+make_simple_parse_fn(CMD_DESEL);
+make_simple_parse_fn(CMD_SHOW);
+make_simple_parse_fn(CMD_HIDE);
+make_simple_parse_fn(CMD_UP);
+make_simple_parse_fn(CMD_DOWN);
+make_simple_parse_fn(CMD_LEFT);
+make_simple_parse_fn(CMD_RIGHT);
+make_simple_parse_fn(CMD_QUIT);
 
 //Just for syntax
 typedef struct _cmd_info {
