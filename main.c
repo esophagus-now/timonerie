@@ -306,7 +306,7 @@ int main(int argc, char **argv) {
     pthread_create(&prod, NULL, producer, &q);
     
     pollfd_array *pfd_arr = new_pollfd_array(16);
-    new_fpga_connection(callback, "localhost", "5555", pfd_arr);
+    new_fpga_connection(callback, argc > 1 ? argv[1] : "localhost", argc > 2 ? argv[2] : "5555", pfd_arr);
         
     err_log = new_msg_win("Message Window");
     

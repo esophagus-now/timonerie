@@ -471,7 +471,7 @@ int main(int argc, char **argv) {
         //Again, we have to do our ugly buffering since there's no guarantee
         //that we read an entire command each time
         struct pollfd can_read_command = {
-            .fd = 3,
+            .fd = cmd_in_fd,
             .events = POLLIN | POLLHUP
         };
         
@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
                 //Unfortunate: no guarantee that we will read an entire
                 //command (8 bytes) so we need to do this awful
                 //buffering trick. 
-                int rc = read(3, cmd_buf + cmd_buf_pos, 8 - cmd_buf_pos);
+                int rc = read(cmd_in_fd, cmd_buf + cmd_buf_pos, 8 - cmd_buf_pos);
                 if (rc < 0) {
                     perror("Could not read from command stream");
                     break;
@@ -498,9 +498,10 @@ int main(int argc, char **argv) {
         }
         
         //If cmd_buf contains full command, parse it and act accordingly
-        if (cmd_buf_pos == 8) {
-            cmd_buf_pos = 0; //We have read the command
-            
+        //More ugly hacking: latch command is a special case
+        int is_latch = (cmd_buf_pos >= 4) && (((((unsigned *)cmd_buf)[0]) & 0xF) == 0xF);
+        
+        if (cmd_buf_pos == 8 || is_latch) {            
             unsigned cmd_addr_raw = ((unsigned *)cmd_buf)[0];
             unsigned cmd_val = ((unsigned *)cmd_buf)[1];
             
@@ -517,8 +518,16 @@ int main(int argc, char **argv) {
                     cmd_out_args.to_send = cmd_addr_raw;
                     cmd_out_args.vld = 1;
                     cmd_out_args.extra_val = cmd_val;
-                    cmd_out_args.extra_vld = 1;
+                    cmd_out_args.extra_vld = is_latch ? 0 : 1;
                     pthread_mutex_unlock(&cmd_out_args.mutex);
+                }
+                
+                //I AM A TERRIBLE PERSON
+                if (is_latch) {
+                    cmd_buf_pos -= 4;
+                    ((unsigned *)cmd_buf)[0] = ((unsigned *)cmd_buf)[1];
+                } else {
+                    cmd_buf_pos = 0;
                 }
                 
                 sched_yield(); //Not sure if this is really needed, but whatever
@@ -576,19 +585,27 @@ int main(int argc, char **argv) {
                 //TODO: proper header needed, but this is good enough for now
                 receipt_hdr = 0b10000 | guv_addr;
                 receipt_data = 
-                    d.keep_pausing_r  ?        1 : 0 |
-                    d.keep_logging_r  ? (1 << 1) : 0 |
-                    d.keep_dropping_r ? (1 << 2) : 0 |
-                    d.log_cnt_r       ? (1 << 3) : 0 |
-                    d.drop_cnt_r      ? (1 << 4) : 0 |
-                    d.inj_TVALID_r    ? (1 << 5) : 0 |
+                    (d.keep_pausing_r  ?        1 : 0) |
+                    (d.keep_logging_r  ? (1 << 1) : 0) |
+                    (d.keep_dropping_r ? (1 << 2) : 0) |
+                    (d.log_cnt_r       ? (1 << 3) : 0) |
+                    (d.drop_cnt_r      ? (1 << 4) : 0) |
+                    (d.inj_TVALID_r    ? (1 << 5) : 0) |
                     //Skip dut_reset since we don't model it here
-                    inj_failed        ? (1 << 7) : 0
+                    (inj_failed        ? (1 << 7) : 0)
                     //Skip dout_not_ready_cnt since we don't model it here
                 ;
                 receipt_vld = 1;
             }
-        } //END if (cmd_buf_pos == 8)
+            
+            //I AM A TERRIBLE PERSON
+            if (is_latch) {
+                cmd_buf_pos -= 4;
+                ((unsigned *)cmd_buf)[0] = ((unsigned *)cmd_buf)[1];
+            } else {
+                cmd_buf_pos = 0;
+            }
+        } //END if (cmd_buf_pos == 8 || is_latch)
             
         sched_yield();
     }
