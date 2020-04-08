@@ -404,7 +404,7 @@ static void free_twm_node_tree(twm_node *head) {
 
 //Mark all nodes in the subtree for redraw. Returns -1 on error (and sets
 //t->error_str), or -2 if t was NULL
-/*static*/ int redraw_twm_node_tree(twm_node *t) {
+int redraw_twm_node_tree(twm_node *t) {
     if (t == NULL) {
         return -2; //This is all we can do
     }
@@ -1565,6 +1565,219 @@ char const* twm_tree_strerror(twm_tree *t) {
     }
     
     return t->error_str;
+}
+
+//Each tree node stores a void pointer to the drawable item. However, we
+//can do a cheeky trick to figure out the type pointed at by the pointer:
+//check its drawing function. Ths function looks up the void pointer in
+//the focused node and returns it if the drawing function matches the one
+//given. It returns NULL on mismatch (or if there is an error). You may
+//check t->error_str for more information
+void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn) {
+    if (t == NULL) {
+        return NULL; //This is all we can do
+    }
+    
+    if (t->focus == NULL) {
+        t->error_str = TWM_NO_FOCUS;
+        return NULL;
+    }
+    
+    if (t->focus->type != TWM_LEAF) {
+        //Special case: sometimes a node only has one child (and our tree
+        //invariant states only leaf nodes may be only children).
+        if (t->focus->num_children == 1) {
+            //Switch focus to the only child
+            t->focus->has_focus = 0;
+            t->focus = t->focus->children[0];
+            if (t->focus == NULL) {
+                t->error_str = TWM_INVALID_TREE;
+                return NULL;
+            }
+            t->focus->has-focus = 1;
+            if (t->focus->type != LEAF) {
+                //This violates the tree invariant
+                t->error_str = TWM_INVALID_TREE;
+                return NULL;
+            }
+        } else {
+            t->error_str = TWM_NOT_LEAF;
+            return NULL;
+        }
+    }
+    
+    if (t->focus->draw_ops.draw_fn != draw_fn) {
+        t->error_str = TWM_TYPE_MISMATCH;
+        return NULL;
+    }
+    
+    t->error_str = TWM_SUCC;
+    return t->focus->item;
+}
+
+//Helper function to recurse through tree. Used by twm_tree_remove_item.
+//Returns 1 if item was found and deleted, 0 if not found, -1 on error (and
+//sets tree->error_str), or -2 if t is NULL
+static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
+    if (tree == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    if (t == NULL) {
+        tree->error_str = TWM_NULL_ARG;
+        return -1;
+    }
+    
+    if (t->type == LEAF && t->item == item) {
+        //Delete this node. For reasons I won't get into, to do that we must
+        //find its parent
+        twm_node *parent = t->parent;
+        if (parent == NULL) {
+            //This is the root of the tree (but double-check)
+            if (tree->head != t) {
+                tree->error_str = TWM_INVALID_TREE;
+                return -1;
+            }
+        }
+        
+        int ind = twm_node_indexof(t, parent);
+        if (ind < 0) {
+            //Propagate error
+            tree->error_str = parent->error_str;
+            return -1;
+        }
+        
+        int rc = twm_remove_node(tree, parent, ind);
+        if (rc == 0) {
+            return 1; //Searched and destroyed
+        } else {
+            return rc; //tree->error_str already set
+        }
+    } else {
+        //Recurse on each of the children
+        if (t->num_children < 1) {
+            tree->error_str = TWM_INVALID_TREE;
+            return -1;
+        }
+        
+        int i;
+        for (i = 0; i < t->num_children; i++) {
+            int rc = twm_tree_node_remove_item(tree, t->children[i], item);
+            if (rc == 0) {
+                //Not found, but no error
+                continue;
+            } else {
+                return rc; //Either found or error; either way, this is the correct return value and t->error_str is set
+            }
+        }
+        
+        return 0; //Not found
+    }
+    
+    tree->error_str = TWM_IMPOSSIBLE;
+    return -1;
+}
+
+//Deletes the first tree node which contains item. Returns 0 on success,
+//-2 if t was NULL, or -1 (and sets t->error_str) on error
+int twm_tree_remove_item(twm_tree *t, void *item) {
+    if (t == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    int rc = twm_tree_node_remove_item(t, t->head, item);
+    
+    if (rc == 0) {
+        //In case user wants to check
+        t->error_str = TWM_NOT_FOUND;
+        return 0; //But this is still not an error
+    } else if (rc == 1) {
+        t->error_str = TWM_SUCC;
+        return 0; //All is good
+    } else {
+        return -1; //t->error_str already set
+    }
+}
+
+//Helper function to recurse through a tree. Returns NULL if not found or
+//on error (tree->error_str is set accordingly)
+static twm_node* find_item(twm_tree *tree, twm_node *t, void *item) {
+    if (tree == NULL) {
+        return NULL;
+    }
+    
+    if (t == NULL) {
+        tree->error_str = TWM_NULL_ARG;
+        return NULL;
+    }
+    
+    if (t->type == LEAF && t->item == item) {
+        return t;
+    } else {
+        //Recursively search children
+        if (t->num_children < 1) {
+            t->error_str = TWM_INVALID_TREE;
+            return NULL;
+        }
+        
+        int i;
+        for (i = 0; i < t->num_children; i++) {
+            twm_node *res = find_item(tree, t->children[i], item);
+            if (res == NULL && t->error_str != TWM_NOT_FOUND) {
+                return NULL; //An error happened
+            } else if (res != NULL) {
+                return res; //Found it!
+            }
+        }
+        
+        t->error_str = TWM_NOT_FOUND;
+        return NULL;
+    }
+    
+    t->error_str = TWM_IMPOSSIBLE;
+    return NULL;
+}
+
+//Sets the tree's focus to the first node containing item. Follows usual 
+//return code pattern
+int twm_tree_focus_item(twm_tree *t, void *item) {
+    if (t == NULL) {
+        return -2;
+    }
+    
+    twm_node *new_focus = find_item(t, t->head, item);
+    if (new_focus == NULL) {
+        return -1; //t->error_str is already set
+    }
+    
+    if (t->focus != NULL) {
+        t->focus->has_focus = 0;
+        redraw_twm_node_tree(t->focus); //TODO: bother checking errors?
+    }
+    
+    t->focus = new_focus;
+    t->focus->has_focus = 1;
+    redraw_twm_node_tree(t->focus); //TODO: bother checking errors?
+    
+    t->error_str = TWM_SUCC;
+    return 0;
+}
+
+//Forces entire tree to redraw. Follows usual return code convention
+int twm_tree_redraw(twm_tree *t) {
+    if (t == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    int rc = redraw_twm_node_tree(t->head);
+    if (rc < 0) {
+        //Propagate error code
+        t->error_str = t->head->error_str;
+        return -1;
+    }
+    
+    t->error_str = TWM_SUCC;
+    return 0;
 }
 
 //////////////////////////////////////////////////

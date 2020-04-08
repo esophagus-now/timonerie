@@ -26,6 +26,9 @@ extern char const *const TWM_OOM; // = "out of memory";
 extern char const *const TWM_OOB; // = "out of bounds";
 extern char const *const TWM_ILLEGAL_DELETE; // = "bad delete (whole tree deletion is disabled)";
 extern char const *const TWM_BAD_DEVELOPER; // = "Marco did not know what to do here";
+extern char const *const TWM_NOT_LEAF; // = "node is not a leaf";
+extern char const *const TWM_NO_FOCUS; // = "no focused node";
+extern char const *const TWM_TYPE_MISMATCH; // = "focused node is not of desired type";
 
 //Draws item. Returns number of bytes added into buf, or -1 on error.
 typedef int draw_fn_t(void *item, int x, int y, int w, int h, char *buf);
@@ -149,7 +152,23 @@ int twm_draw_tree(int fd, twm_tree *t, int x, int y, int w, int h);
 
 char const* twm_tree_strerror(twm_tree *t);
 
+//Each tree node stores a void pointer to the drawable item. However, we
+//can do a cheeky trick to figure out the type pointed at by the pointer:
+//check its drawing function. Ths function looks up the void pointer in
+//the focused node and returns it if the drawing function matches the one
+//given. It returns NULL on mismatch (or if there is an error). You may
+//check t->error_str for more information
+void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn);
 
-//Temporary, for debugging
-int redraw_twm_node_tree(twm_node *t);
+//Deletes the first tree node which contains item. Returns 0 on success,
+//-2 if t was NULL, or -1 (and sets t->error_str) on error
+int twm_tree_remove_item(twm_tree *t, void *item);
+
+//Sets the tree's focus to the first node containing item. Follows usual 
+//return code pattern
+int twm_tree_focus_item(twm_tree *t, void *item);
+
+//Forces entire tree to redraw. Follows usual return code convention
+int twm_tree_redraw(twm_tree *t);
+
 #endif
