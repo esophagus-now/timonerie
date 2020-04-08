@@ -157,6 +157,8 @@ typedef void (*readline_callback)(char *);
 
 //From https://github.com/ulfalizer/readline-and-ncurses/blob/master/rlncurses.c
 void forward_to_readline(char c);
+//Kludge to send special keys to readline once we decide we don't want them
+void readline_sendstr(char const *str);
 void readline_redisplay(void);
 void place_readline_cursor(void);
 //Returns -1 on error, 0 on success

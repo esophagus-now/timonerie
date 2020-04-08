@@ -164,6 +164,14 @@ void forward_to_readline(char c) {
     rl_callback_read_char();
 }
 
+//Kludge to send special keys to readline once we decide we don't want them
+void readline_sendstr(char const *str) {
+    if (str == NULL) return;
+    for (; *str; str++) {
+        forward_to_readline(*str);
+    }
+}
+
 void readline_redisplay(void) {
     //I use term_cols to allocate an array on the stack, so I want to make sure
     //its value is sane
