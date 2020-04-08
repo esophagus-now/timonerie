@@ -1,0 +1,8 @@
+Here is what I do:
+
+$ mkfifo cmd_in
+$ mkfifo log_out
+$ netcat -l -p 3333 > cmd_in < log_out -v &
+$ yes | ./fake_dbg_guv 0 cmd_in log_out > /dev/null &
+$ ./main localhost 3333 # Open timonerie to interact with fake dbg_guv
+
