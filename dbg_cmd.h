@@ -22,6 +22,7 @@
     X(UNUSED_14        ),\
     X(LATCH            ),\
     /*These next commands are for timonerie rather than a dbg_guv*/\
+    X(DUMMY)
     
 
 #define X(x) x

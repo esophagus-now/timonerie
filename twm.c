@@ -587,6 +587,9 @@ int twm_tree_move_focus(twm_tree *t, twm_dir dir) {
             t->error_str = t->focus->error_str;
             return -1;
         }
+        
+        t->error_str = TWM_SUCC;
+        return 0;
     } else if (dir == TWM_CHILD) {
         if (t->focus->type == TWM_LEAF) {
             //Nothing to do
@@ -782,6 +785,13 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
         int rc = twm_remove_node(t, grandparent, parent_ind);
         if (rc < 0) {
             return -1; //t->error_str already set
+        }
+    } else {
+        int rc = redraw_twm_node_tree(parent);
+        if (rc < 0) {
+            //propagate error
+            t->error_str = parent->error_str;
+            return -1;
         }
     }
     
