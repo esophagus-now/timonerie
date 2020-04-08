@@ -175,37 +175,6 @@ void callback(new_fpga_cb_info info) {
     fci_head.next->prev = n;
     fci_head.next = n;
     
-    //TEMPORARY: until I add the commands, we'll do this for now
-    /*dbg_guv *g = &f->guvs[0];
-    dbg_guv_set_name(g, "FIZZCNT");
-    
-    if (t != NULL) {
-        pthread_mutex_lock(&t_mutex);
-        int rc = twm_tree_add_window(t, g, dbg_guv_draw_ops);
-        if (rc < 0) {
-            char line[80];
-            sprintf(line, "Could not add FIZZCNT to tree: %s", t->error_str);
-            char *old = msg_win_append(err_log, strdup(line));
-            if (old != NULL) free(old);
-        } 
-        pthread_mutex_unlock(&t_mutex);
-    }
-    
-    dbg_guv *h = &f->guvs[1];
-    dbg_guv_set_name(h, "FIZZBUZZ");
-    
-    if (t != NULL) {
-        pthread_mutex_lock(&t_mutex);
-        int rc = twm_tree_add_window(t, h, dbg_guv_draw_ops);
-        if (rc < 0) {
-            char line[80];
-            sprintf(line, "Could not add FIZZBUZZ to tree: %s", t->error_str);
-            char *old = msg_win_append(err_log, strdup(line));
-            if (old != NULL) free(old);
-        }
-        pthread_mutex_unlock(&t_mutex);
-    }*/
-    
     pollfd_array *p = pfd_arr;
     int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
     if (rc < 0) {
@@ -303,6 +272,38 @@ void got_rl_line(char *str) {
                 sprintf(line, "Error while searching tree: %s", t->error_str);
                 msg_win_dynamic_append(err_log, line);
             }
+            break;
+        }
+        case CMD_NAME: {
+            symtab_entry *e = symtab_lookup(ids, cmd.id);
+            if (e != NULL) {
+                cursor_pos(1, term_rows - 1);
+                write_const_str("This ID is already in use" ERASE_TO_END);
+                break;
+            }
+            
+            dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+            if (g == NULL) {
+                cursor_pos(1, term_rows-1);
+                sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
+                write(1, line, len);
+                return;
+            } 
+            
+            dbg_guv_set_name(g, cmd.id);
+            
+            sem_val symdat = {
+                .type = SYM_DG,
+                .v = g
+            };
+            
+            int rc = symtab_append(ids, cmd.id, &symdat, sizeof(symdat));
+            if (rc < 0) {
+                char line[80];
+                sprintf("Could not append symbol to table: %s", ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+            }
+            
             break;
         }
         case CMD_DUMMY: {

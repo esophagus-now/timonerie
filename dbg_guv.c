@@ -375,6 +375,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *e
 void dbg_guv_set_name(dbg_guv *d, char *name) {
     if (d->name != NULL) free(d->name);
     d->name = strdup(name);
+    d->need_redraw = 1;
 }
 
 //Returns number of bytes added into buf, or -1 on error.
