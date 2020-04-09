@@ -2,3 +2,5 @@ timonerie.geany
 main
 main.exe
 *_IGNORE
+textio_tests.c
+fake_dbg_guv

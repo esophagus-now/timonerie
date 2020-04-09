@@ -16,6 +16,7 @@ char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
 char const *const DBG_GUV_NULL_CB = "received NULL callback";
 char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
+char const *const DBG_GUV_CNX_CLOSED = "external host closed connection";
 
 //////////////////////////////
 //Static functions/variables//
@@ -51,8 +52,14 @@ static void* fpga_egress_thread(void *arg) {
 }
 
 static void init_dbg_guv(dbg_guv *d, fpga_connection_info *f, int addr) {
+    memset(d, 0, sizeof(dbg_guv));
+    
     init_linebuf(&d->logs, DBG_GUV_SCROLLBACK);
     pthread_mutex_init(&d->logs_mutex, NULL);
+    
+    char line[80];
+    sprintf(line, "%p[%d]", f, addr);
+    d->name = strdup(line);
     
     d->need_redraw = 1; //Need to draw when first added in
     d->values_unknown = 1;
@@ -75,7 +82,7 @@ static void deinit_dbg_guv(dbg_guv *d) {
 //A helper function to properly allocate, construct, and initialize an 
 //fpga_connection_info struct.
 static fpga_connection_info *construct_fpga_connection() {
-    fpga_connection_info *ret = malloc(sizeof(fpga_connection_info));
+    fpga_connection_info *ret = calloc(1, sizeof(fpga_connection_info));
     if (!ret) return NULL;
     
     int i;
@@ -196,6 +203,9 @@ err_freeaddrinfo:
 err_delete_f:
     if (err_occurred) del_fpga_connection(f);
 err_nothing:
+    //These were copied in new_fpga_connection
+    free(args->node);
+    free(args->serv);
     free(args);
     //Let the callback know what happened, if we have one
     if(cb != NULL) cb(ret);
@@ -225,8 +235,10 @@ int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data
     
     args->f = f;
     args->cb = cb;
-    args->node = node;
-    args->serv = serv;
+    //Duplicate node and serv, since the caller might not leave them untouched
+    //for long
+    args->node = strdup(node);
+    args->serv = strdup(serv);
     args->user_data = user_data;
     
     //Spin up thread that opens connection
@@ -287,8 +299,7 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
 }
 
 //TODO: runtime sizes for the stream?
-//TODO: remove err_win as arugment (which is just there for debuuging)
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog) {
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     if (f == NULL) {
         return -2; //This is all we can do
     }
@@ -300,6 +311,9 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *e
     int num_read = read(fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
     if (num_read < 0) {
         f->error_str = strerror(errno);
+        return -1;
+    } else if (num_read == 0) {
+        f->error_str = DBG_GUV_CNX_CLOSED;
         return -1;
     }
     f->buf_pos += num_read;
@@ -364,6 +378,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *e
 void dbg_guv_set_name(dbg_guv *d, char *name) {
     if (d->name != NULL) free(d->name);
     d->name = strdup(name);
+    d->need_redraw = 1;
 }
 
 //Returns number of bytes added into buf, or -1 on error.
@@ -446,8 +461,19 @@ void trigger_redraw_dbg_guv(void *item) {
     d->need_redraw = 1;
 }
 
+//Simply scrolls the linebuf; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void dbg_guv_scroll(dbg_guv *d, int amount) {
+    d->log_pos += amount;
+    if (d->log_pos < 0) d->log_pos = 0;
+    if (d->log_pos >= d->logs.nlines) d->log_pos = d->logs.nlines - 1;
+    d->need_redraw = 1;
+}
+
 draw_operations const dbg_guv_draw_ops = {
     draw_fn_dbg_guv,
     draw_sz_dbg_guv,
-    trigger_redraw_dbg_guv
+    trigger_redraw_dbg_guv,
+    NULL //No exit function needed
 };

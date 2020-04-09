@@ -1,5 +1,6 @@
 #ifndef DBG_CMD_H
 #define DBG_CMD_H 1
+#include "dbg_guv.h"
 #include "symtab.h"
 
 //The trick here is that the register names will match to the correct
@@ -21,48 +22,54 @@
     X(UNUSED_13        ),\
     X(UNUSED_14        ),\
     X(LATCH            ),\
-    /*These next commands are for timonerie rather than a dbg_guv*/\
-    X(DUMMY),\
-    X(OPEN),\
-    X(CLOSE)
+
+#define DBG_CMD_IDENTS \
+    X(CMD_DUMMY),\
+    X(CMD_OPEN),\
+    X(CMD_CLOSE),\
+    X(CMD_SEL),\
+    X(CMD_NAME),\
+    X(CMD_DBG_REG),\
+    X(CMD_MSG),\
+    X(CMD_QUIT),\
     
 
 #define X(x) x
-typedef enum _dbg_cmd_type {
+typedef enum _dbg_reg_type {
     DBG_GUV_REG_IDENTS
-} dbg_cmd_type;
+} dbg_reg_type;
 #undef X
 
 extern char const *DBG_GUV_REG_NAMES[];
 
+#define X(x) x
+typedef enum _dbg_cmd_type {
+    DBG_CMD_IDENTS
+} dbg_cmd_type;
+#undef X
+
+extern char const *DBG_CMD_NAMES[];
+
+#define MAX_STR_PARAM_SIZE 64
 typedef struct _dbg_cmd {
     dbg_cmd_type type;
     
-    //If this command is destined for a dbg_guv, here is the information
-    //that gets sent
-    unsigned addr;
-    int has_param;
-    unsigned param;
-    
-    //Debug/pretty-print information
+    //Fields used by parsed command. The ones which are used depends on the
+    //dbg_cmd_type
+    dbg_reg_type reg;
+    char id[MAX_STR_PARAM_SIZE + 1]; //Identifier
     unsigned dbg_guv_addr;
-    //TODO: also parse FPGA number?
-    
-    symtab *
+    int has_guv_addr; //The "sel" command can be fore an FPGA or a dbg_guv
+    int has_param; //Some dbg_guv register commadns have a parameter, and some don't
+    unsigned param;
+    char node[MAX_STR_PARAM_SIZE + 1]; //The hostname...
+    char serv[MAX_STR_PARAM_SIZE + 1]; //...and port (service) number for opening connections
     
     //Error information
     char const *error_str;
     int error_pos;
     char smoking_gun;
 } dbg_cmd;
-
-typedef struct _dbg_cmd_ctx {
-    symtab *cmds;
-    symtab *ids;
-    dbg_guv_it active_guv;
-    
-    char const *error_str;
-} dbg_cmd_ctx;
 
 typedef int parse_fn(dbg_cmd *dest, char const *str);
 
@@ -85,5 +92,8 @@ extern char const *const DBG_CMD_UNEX            ; //    = "Unexpected character
 extern char const *const DBG_CMD_BAD_PARAM        ; //    = "Malformed parameter value";
 extern char const *const DBG_CMD_NULL_PTR        ; //    = "NULL pointer passed to dbg_cmd parse";
 extern char const *const DBG_CMD_IMPOSSIBLE        ; //    = "The dbg_cmd code somehow reached an area Marco thought was impossible";
-
-#endif
+extern char const *const DBG_CMD_NOT_IMPL        ; //    = "This function is not implement";
+extern char const *const DBG_CMD_REDEF        ; //    = "Identifier is already in use";
+extern char const *const DBG_CMD_BAD_CMD        ; //    = "No such command";
+extern char const *const DBG_CMD_OPEN_USAGE        ; //    = "Usage: open fpga_name hostname port";
+extern char const *const DBG_CMD_CLOSE_USAG

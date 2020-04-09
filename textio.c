@@ -52,6 +52,14 @@ char const *const TEXTIO_OOM = "out of memory";
 char const *const TEXTIO_MSG_WIN_TOO_SMALL = "message window too small";
 char const *const TEXTIO_OOB = "out of bounds";
 
+static win_resize_cb *resize_cb = NULL;
+
+//This function will be called inside the SIGWINCH handler managed by textio.
+//Pass NULL to remove the callback
+void set_resize_cb(win_resize_cb *cb) {
+    resize_cb = cb;
+}
+
 void cursor_pos(int x, int y) {
     char line[80];
     int len;
@@ -66,8 +74,6 @@ int cursor_pos_cmd(char *buf, int x, int y){
     return len;
 }
 
-volatile sig_atomic_t called = 0;
-
 static void get_term_sz() {
     //From https://stackoverflow.com/questions/1022957/getting-terminal-width-in-c
     struct winsize w;
@@ -76,11 +82,11 @@ static void get_term_sz() {
     term_rows = w.ws_row;
     term_cols = w.ws_col;
     
-    called = 1;
+    if (resize_cb != NULL) resize_cb();
 }
 
 //Returns 0 on success, -1 on error
-int term_init() {
+int term_init(int enable_mouse) {
     //Check if we are outputting to a TTY
     if (isatty(1) == 0) {
         fprintf(stderr, "Cannot use fancy UI when not ouputting to a TTY\n");
@@ -118,8 +124,10 @@ int term_init() {
     write(1, ALT_BUF_ON, LEN_ALT_BUF_ON);
     //Clear the screen
     write(1, ERASE_ALL, LEN_ERASE_ALL);
-    //Turn on mouse reporting
-    write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
+    if (enable_mouse) {
+        //Turn on mouse reporting
+        write(1, REPORT_CURSOR_ON, LEN_REPORT_CURSOR_ON);
+    }
     
     cursor_pos(0,0);
     return 0;
@@ -131,7 +139,6 @@ void clean_screen() {
         write(1, REPORT_CURSOR_OFF, LEN_REPORT_CURSOR_OFF);
         tcsetattr(0, TCSANOW, &old);
         changed = 0;
-        printf("Called = %d\n", called);
     }
 }
 
@@ -160,6 +167,14 @@ void forward_to_readline(char c) {
     input = c;
     input_avail = 1;
     rl_callback_read_char();
+}
+
+//Kludge to send special keys to readline once we decide we don't want them
+void readline_sendstr(char const *str) {
+    if (str == NULL) return;
+    for (; *str; str++) {
+        forward_to_readline(*str);
+    }
 }
 
 void readline_redisplay(void) {
@@ -880,9 +895,10 @@ int draw_linebuf(linebuf *l, int offset, int x, int y, int w, int h, char *buf) 
     if (w == 0 || h == 0) return 0; //Nothing to draw
     if (x >= term_cols || y >= term_rows) return 0; //Nothing to draw
     
-    if (offset + w >= l->nlines) {
-        l->error_str = TEXTIO_OOB;
-        return -1;
+    if (offset + (h-1) >= l->nlines) {
+        /*l->error_str = TEXTIO_OOB;
+        return -1;*/
+        offset = (l->nlines - 1) - (h-1);
     }
     
     if (x < 0 || y < 0 || w < 0 || h < 0) {
@@ -1018,6 +1034,11 @@ char* msg_win_append(msg_win *m, char *log) {
     return ret;
 }
 
+//Calls linebuf_append(&m->l, strdup(log)). Any old logs are freed.
+void msg_win_dynamic_append(msg_win *m, char const *log) {
+    char *old = msg_win_append(m, strdup(log));
+    if (old) free(old);
+}
 
 //Returns number of bytes added into buf, or -1 on error.
 int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {        
@@ -1051,7 +1072,7 @@ int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf) {
     }
     buf += incr;
     
-    //m->need_redraw = 0; //Removed for debugging
+    m->need_redraw = 0;
     
     return buf - buf_saved;
 }
@@ -1084,6 +1105,16 @@ void trigger_redraw_msg_win(void *item) {
     msg_win *m = (msg_win*) item;
     if (!m) return;
     
+    m->need_redraw = 1;
+}
+
+//Simply scrolls the linebuf; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void msg_win_scroll(msg_win *m, int amount) {
+    m->buf_offset += amount;
+    if (m->buf_offset < 0) m->buf_offset = 0;
+    if (m->buf_offset >= m->l.nlines) m->buf_offset = m->l.nlines - 1;
     m->need_redraw = 1;
 }
 

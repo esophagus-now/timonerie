@@ -130,12 +130,18 @@ typedef struct _textio_input{
     char expected;
 } textio_input;
 
+typedef void win_resize_cb(void);
+
 //////////////
 //Prototypes//
 //////////////
 
 //TODO: make this less hacky
 extern int term_rows, term_cols;
+
+//This function will be called inside the SIGWINCH handler managed by textio.
+//Pass NULL to remove the callback
+void set_resize_cb(win_resize_cb *cb);
 
 void cursor_pos(int x, int y);
 
@@ -157,6 +163,8 @@ typedef void (*readline_callback)(char *);
 
 //From https://github.com/ulfalizer/readline-and-ncurses/blob/master/rlncurses.c
 void forward_to_readline(char c);
+//Kludge to send special keys to readline once we decide we don't want them
+void readline_sendstr(char const *str);
 void readline_redisplay(void);
 void place_readline_cursor(void);
 //Returns -1 on error, 0 on success
@@ -261,6 +269,9 @@ void msg_win_set_name(msg_win *m, char *name);
 //Finally, a redraw is triggered,
 char* msg_win_append(msg_win *m, char *log);
 
+//Calls linebuf_append(&m->l, strdup(log)). Any old logs are freed.
+void msg_win_dynamic_append(msg_win *m, char const *log);
+
 //Returns number of bytes added into buf, or -1 on error.
 int draw_fn_msg_win(void *item, int x, int y, int w, int h, char *buf);
 
@@ -271,6 +282,11 @@ int draw_sz_msg_win(void *item, int w, int h);
 //Tells us that we should redraw, probably because we moved to another
 //area of the screen
 void trigger_redraw_msg_win(void *item);
+
+//Simply scrolls the msg_win; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void msg_win_scroll(msg_win *m, int amount);
 
 extern draw_operations const msg_win_draw_ops;
 

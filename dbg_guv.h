@@ -2,6 +2,7 @@
 #define DBG_GUV_H 1
 
 #include <pthread.h>
+#include <event2/event.h>
 #include "queue.h"
 #include "textio.h"
 #include "twm.h"
@@ -61,7 +62,7 @@ typedef struct _fpga_connection_info {
     struct sockaddr *addr;
     int addr_len;
     int sfd;
-    int sfd_state;
+    struct event *ev; //Event for reading input
     
     //General-purpose buffer, but I only use it for network ingress data
     char buf[FCI_BUF_SIZE];
@@ -123,8 +124,8 @@ void del_fpga_connection(fpga_connection_info *f);
 //desired
 char *append_log(fpga_connection_info *f, int addr, char *log);
 
-//TODO: runtime sizes for the stream?
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog);
+//TODO: runtime sizes for the stream
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
 
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
@@ -141,6 +142,11 @@ int draw_sz_dbg_guv(void *item, int w, int h);
 //area of the screen
 void trigger_redraw_dbg_guv(void *item);
 
+//Simply scrolls the dbg_guv; positive for up, negative for down. A special
+//check in this function, along with a more robust check in draw_linebuf, 
+//make sure that you won't read out of bounds.
+void dbg_guv_scroll(dbg_guv *d, int amount);
+
 extern draw_operations const dbg_guv_draw_ops;
 
 ///////////////////////////////////////////////////////
@@ -150,5 +156,6 @@ extern char const *const DBG_GUV_SUCC; //= "success";
 extern char const *const DBG_GUV_NULL_ARG; //= "received NULL argument";
 extern char const *const DBG_GUV_NULL_CB; //= "received NULL callback";
 extern char const *const DBG_GUV_NULL_CONN_INFO; //= "received NULL fpga_connection_info";
+extern char const *const DBG_GUV_CNX_CLOSED; //= "external host closed connection";
 
 #endif
