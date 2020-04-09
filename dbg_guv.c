@@ -16,6 +16,7 @@ char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
 char const *const DBG_GUV_NULL_CB = "received NULL callback";
 char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
+char const *const DBG_GUV_CNX_CLOSED = "external host closed connection";
 
 //////////////////////////////
 //Static functions/variables//
@@ -298,8 +299,7 @@ char *append_log(fpga_connection_info *f, int addr, char *log) {
 }
 
 //TODO: runtime sizes for the stream?
-//TODO: remove err_win as arugment (which is just there for debuuging)
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog) {
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     if (f == NULL) {
         return -2; //This is all we can do
     }
@@ -311,6 +311,9 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *e
     int num_read = read(fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
     if (num_read < 0) {
         f->error_str = strerror(errno);
+        return -1;
+    } else if (num_read == 0) {
+        f->error_str = DBG_GUV_CNX_CLOSED;
         return -1;
     }
     f->buf_pos += num_read;

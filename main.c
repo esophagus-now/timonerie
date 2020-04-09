@@ -1,62 +1,20 @@
 #include <stdio.h>
-#include <ctype.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netdb.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include <sched.h>
 #include <string.h>
 #include <stdio.h>
 #include <readline/readline.h>
 #include <readline/history.h>
-#include <poll.h>
-#include <time.h>
 #include <signal.h>
-#include "queue.h"
+#include <event2/event.h>
+#include <pthread.h>
 #include "textio.h"
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
-#include "pollfd_array.h"
 #include "twm.h"
 
 #define write_const_str(x) write(1, x, sizeof(x))
-
-void producer_cleanup(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered text producer cleanup\n");
-#endif
-    queue *q = (queue*)v;
-    
-    pthread_mutex_lock(&q->mutex);
-    q->num_producers--;
-    pthread_mutex_unlock(&q->mutex);
-    
-    pthread_cond_broadcast(&q->can_cons);
-}
-
-void* producer(void *v) {
-#ifdef DEBUG_ON
-    fprintf(stderr, "Entered text producer\n");
-#endif
-    queue *q = (queue*)v;
-    
-    pthread_cleanup_push(producer_cleanup, q);
-    
-    //Read a single character from stdin until EOF
-    char c;
-    while (read(0, &c, 1) > 0) {
-        int rc = enqueue_single(q, c);
-        if (rc < 0) break;
-    }
-    
-    pthread_cleanup_pop(1);
-    
-    return NULL;
-}
 
 typedef struct _dummy {
     int need_redraw;
@@ -124,13 +82,10 @@ msg_win *err_log = NULL;
 twm_tree *t = NULL; 
 pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-//Unfortunately, this has to be global, since got_rl_line needs access to it
-//in order to give it to new_fpga_connection so that it will be passed into
-//callback... me wonders if this is getting out of hand
-pollfd_array *pfd_arr = NULL;
-
 //You know what? It's time to embrace the globals! I need to simplify my
 //life if I'm ever gonna finish this
+struct event_base *ev_base = NULL;
+
 typedef enum {
     SYM_FCI,
     SYM_DG
@@ -153,44 +108,6 @@ fci_list fci_head = {
     .prev = &fci_head,
     .next = &fci_head
 };
-
-int stop = 0;
-
-void callback(new_fpga_cb_info info) {
-    fpga_connection_info *f = info.f;
-    symtab_entry *e = (symtab_entry*) info.user_data;
-    if (f == NULL) {
-        char line[80];
-        sprintf(line, "Could not connect to FPGA: %s", info.error_str);
-        msg_win_dynamic_append(err_log, line);
-        symtab_array_remove(ids, e);
-        return;
-    } else {
-        char line[120];
-        sprintf(line, "Connection [%s] opened", e->sym);
-        msg_win_dynamic_append(err_log, line);
-    }
-    
-    fci_list *n = malloc(sizeof(fci_list));
-    n->f = f;
-    n->prev = &fci_head;
-    n->next = fci_head.next;
-    fci_head.next->prev = n;
-    fci_head.next = n;
-    
-    pollfd_array *p = pfd_arr;
-    int rc = pollfd_array_append_nodup(p, f->sfd, POLLIN | POLLHUP, f);
-    if (rc < 0) {
-        char line[80];
-        sprintf(line, "Could not add new connection to pollfd array: %s", p->error_str);
-        char *old = msg_win_append(err_log, strdup(line));
-        if (old != NULL) free(old);
-        return;
-    }
-    
-    sym_dat(e, sem_val*)->type = SYM_FCI;
-    sym_dat(e, sem_val*)->v = f;
-}
 
 void got_rl_line(char *str) {    
     cursor_pos(1,2);
@@ -346,7 +263,8 @@ void got_rl_line(char *str) {
             return;
         }
         case CMD_QUIT: 
-            stop = 1;
+            //end libevent event loop
+            event_base_loopbreak(ev_base);
             break;
         case CMD_DBG_REG: {
             int dbg_guv_addr;
@@ -427,299 +345,279 @@ void twm_resize_cb(void) {
     readline_redisplay();
 }
 
-//Don't forget: callbacks for when SIGWINCH is signalled
+void draw_cb(evutil_socket_t fd, short what, void *arg) {
+    pthread_mutex_lock(&t_mutex);
+    
+    rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
+    if (rc < 0) {
+        sprintf(errmsg, "Could not draw tree: %s", t->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+    } else if (rc > 0) {
+        place_readline_cursor();
+    }
+    
+    pthread_mutex_unlock(&t_mutex);
+}
+
+void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
+    fpga_connection_info *f = arg;
+    
+    rc = read_fpga_connection(f, cur->fd, 4, err_log);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not read from FPGA: %s", f->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+        event_del(args->me);
+        //TODO: properly close out FCI; free its resources, remove its
+        //windows from the TWM, remove its IDs, and remove it from the 
+        //global list to free on program exit
+    }
+}
+
+void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
+    event_base *base = arg;
+    
+    //Sometimes timonerie uses a special key. However, if it doesn't use it,
+    //we should pass it to readline
+    static char ansi_code[16];
+    static int ansi_code_pos = 0;
+    
+    //Scratchpad for building error messages
+    char errmsg[80];
+    
+    //Slow to read one character at a time, but who cares? The user isn't
+    //typing super fast, and timonerie is not meant to be used by piping
+    //into its stdin (in fact, it will quit if not used with a TTY).
+    char c;
+    read(STDIN_FILENO, &c, 1);
+    
+    //If user pressed CTRL-D we can quit
+    if (c == '\x04') {
+        event_base_loopbreak(base);
+    }
+    
+    ansi_code[ansi_code_pos++] = c;
+    
+    textio_input in;
+    int rc = textio_getch_cr(c, &in);
+    if (rc == 0) {
+        //Assume we've used the ansi code we've been saving, until
+        //it turns out we didn't
+        int used_ansi_code = 1;
+        
+        switch(in.type) {
+        case TEXTIO_GETCH_PLAIN: {
+            if (in.c == 12) {
+                twm_resize_cb(); //This is the callback that textio calls on SIGWINCH events
+            }
+        }
+        case TEXTIO_GETCH_FN_KEY: {
+            int dir;
+            int got_arrow_key = 1;
+            switch(in.key) {
+            case TEXTIO_KEY_UP:
+                dir = TWM_UP;
+                break;
+            case TEXTIO_KEY_DOWN:
+                dir = TWM_DOWN;
+                break;
+            case TEXTIO_KEY_LEFT:
+                dir = TWM_LEFT;
+                break;
+            case TEXTIO_KEY_RIGHT:
+                dir = TWM_RIGHT;
+                break;
+            default:
+                got_arrow_key = 0;
+                break;
+            }
+            
+            if (got_arrow_key) {
+                //Let the compiler optimize these predicates
+                if (in.meta && in.shift && !in.ctrl) {
+                    int rc = twm_tree_move_focused_node(t, dir);
+                    if (rc < 0) {
+                        sprintf(errmsg, "Could not move window: %s", t->error_str);
+                        msg_win_dynamic_append(err_log, errmsg);
+                    }
+                } else if (in.meta && !in.shift && !in.ctrl) {
+                    int rc = twm_tree_move_focus(t, dir);
+                    if (rc < 0) {
+                        sprintf(errmsg, "Could not move focus: %s", t->error_str);
+                        msg_win_dynamic_append(err_log, errmsg);
+                    }
+                } else if (!in.meta && in.ctrl) {
+                    dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+                    if (g) {
+                        if (dir == TWM_UP) dbg_guv_scroll(g, in.shift ? 10: 1);
+                        if (dir == TWM_DOWN) dbg_guv_scroll(g, in.shift ? -10: -1);
+                    }
+                    msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
+                    if (m) {
+                        if (dir == TWM_UP) msg_win_scroll(m, in.shift ? 10: 1);
+                        if (dir == TWM_DOWN) msg_win_scroll(m, in.shift ? -10: -1);
+                    }
+                    
+                    if (g == NULL && m == NULL) {
+                        msg_win_dynamic_append(err_log, "Not a scrollable window");
+                    }
+                } else {
+                    used_ansi_code = 0;
+                }
+            } else {
+                used_ansi_code = 0;
+            }
+            
+            break;
+        }
+        case TEXTIO_GETCH_ESCSEQ:
+            switch(in.code) {
+            case 'q':
+                rc = twm_tree_remove_focused(t);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not delete window: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'v':
+                rc = twm_set_stack_dir_focused(t, TWM_VERT);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not set to vertical: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'h':
+                rc = twm_set_stack_dir_focused(t, TWM_HORZ);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not set to horizontal: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'w':
+                rc = twm_toggle_stack_dir_focused(t);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not toggle stack direction: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'a':
+                rc = twm_tree_move_focus(t, TWM_PARENT);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not move focus up: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'z':
+                rc = twm_tree_move_focus(t, TWM_CHILD);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not move focus down: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            default:
+                used_ansi_code = 0;
+                break;
+            }
+            break;
+        default:
+            used_ansi_code = 0;
+            break;
+        }
+        
+        if (!used_ansi_code) {
+            ansi_code[ansi_code_pos] = 0;
+            readline_sendstr(ansi_code);
+        }
+        
+        ansi_code_pos = 0;
+    } else if (rc < 0) {
+        sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
+        msg_win_dynamic_append(err_log, line);
+    }
+}
+
+//TODO: function that runs on every event loop and tries calling timonier
+//update functions
+
+void fpga_conn_cb(new_fpga_cb_info info) {
+    fpga_connection_info *f = info.f;
+    symtab_entry *e = (symtab_entry*) info.user_data;
+    if (f == NULL) {
+        char line[80];
+        sprintf(line, "Could not connect to FPGA: %s", info.error_str);
+        msg_win_dynamic_append(err_log, line);
+        symtab_array_remove(ids, e);
+        return;
+    } else {
+        char line[120];
+        sprintf(line, "Connection [%s] opened", e->sym);
+        msg_win_dynamic_append(err_log, line);
+    }
+    
+    fci_list *n = malloc(sizeof(fci_list));
+    n->f = f;
+    n->prev = &fci_head;
+    n->next = fci_head.next;
+    fci_head.next->prev = n;
+    fci_head.next = n;
+    
+    //Hook up a new event to read data from the connection
+    struct event *read_ev = event_new(ev_base, f->sfd, EV_READ | EV_PERSIST, fpga_read_cb, f);
+    event_add(read_ev, NULL);
+    
+    sym_dat(e, sem_val*)->type = SYM_FCI;
+    sym_dat(e, sem_val*)->v = f;
+}
 
 int main(int argc, char **argv) {    
     int rc;
+    
+    //Setup the TWM screen
     atexit(clean_screen);
     term_init(0);
-    
     init_readline(got_rl_line);
     
     t = new_twm_tree();
     if (!t) {
+        fprintf(stderr, "Could not start TWM\n");
         return -1;
     }
     
-    set_resize_cb(twm_resize_cb);
+    set_resize_cb(twm_resize_cb); //Auto-redraw when terminal is resized
     
-    //Set up thread that reads from keyboard/mouse. This will disappear soon
-    //once I set up the call to poll() in the main event loop
-    queue q = QUEUE_INITIALIZER;
-    q.num_producers++;
-    q.num_consumers++;    
-    
-    pthread_t prod;
-    pthread_create(&prod, NULL, producer, &q);
-    
-    //Initialize our (Evil) globals
-    pfd_arr = new_pollfd_array(16);
+    //Initialize our (EVIL) global symbol table
     ids = new_symtab(32);
-    //new_fpga_connection(callback, argc > 1 ? argv[1] : "localhost", argc > 2 ? argv[2] : "5555", pfd_arr);
-        
+    
+    //Set up the message window, and show it by default in the TWM    
     err_log = new_msg_win("Message Window");
     
     pthread_mutex_lock(&t_mutex);
     rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
     pthread_mutex_unlock(&t_mutex);
     
-    //Buffer for constructing strings to write to stdout
-    char line[80];
-    int len = 0;
+    //Set up libevent. I ended up just making the base a global; it was a 
+    //lot easier that way
+    ev_base = event_base_new();
     
-    //Draw initial message
-    //cursor_pos(1, term_rows);
-    //sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
-    //write(1, line, len);
+    //Event for stdin
+    struct event *input_ev = event_new(ev_base, STDIN_FILENO, EV_READ | EV_PERSIST, handle_stdin_cb, ev_base);
+    event_add(input_ev, NULL);
+    
+    //Event for perdiocally drawing the TWM every 50 ms
+    struct event *draw_ev = event_new(ev_base, -1, EV_TIMEOUT | EV_PERSISR, draw_cb, NULL);
+    event_add(input_ev, (struct timeval[1]){{0, 50*1000}});
+    
+    //Events for reading from FPGA connections are added by fpga_conn_cb, 
+    //which is triggered when a connection is succesfully opened 
     
     //Main event loop
-    char ansi_code[16];
-    int ansi_code_pos = 0;
+    event_loop_dispatch(ev_base);
     
-    clock_t last_redraw = clock();
-    while(1) {
-        char c;  
-        char errmsg[80];   
-        
-        pthread_mutex_lock(&t_mutex);
-        clock_t now = clock();
-        //Prevent crazy screen slowdown by not redrawing twice (or more)
-        //inside of 50 milliseconds
-        if (((double) (now - last_redraw) / (double) CLOCKS_PER_SEC) > 0.050) {
-            rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
-            last_redraw = clock();
-            if (rc < 0) {
-                sprintf(errmsg, "Could not draw tree: %s", t->error_str);
-                msg_win_dynamic_append(err_log, errmsg);
-            } else if (rc > 0) {
-                place_readline_cursor();
-            }
-        }
-        pthread_mutex_unlock(&t_mutex);
-        
-        //Get network data
-        //Are any fds available for reading right now?
-        rc = poll(pfd_arr->pfds, pfd_arr->num, 0);
-        
-        if (rc < 0) {
-            int saved_errno = errno;
-            sprintf(errmsg, "Could not issue poll system call: %s", strerror(saved_errno));
-            msg_win_dynamic_append(err_log, errmsg);
-        } else {
-            //Traverse the active fds in pfd_arr
-            struct pollfd *cur = NULL;
-            while ((cur = pollfd_array_get_active(pfd_arr, cur)) != NULL) {
-                //Check if this connection was lost
-                if (cur->revents & POLLHUP) {
-                    sprintf(errmsg, "A socket was unexpectedly closed");
-                    msg_win_dynamic_append(err_log, errmsg);
-                    //Remove from pollfd_array? The traversal function needs 
-                    //to be smart...
-                    break;
-                }
-                
-                //Get the fpga_connection_info associated with this fd
-                void **v = pollfd_array_get_user_data(pfd_arr, cur);
-                if (v == NULL) {
-                    sprintf(errmsg, "Could not issue poll system call: %s", pfd_arr->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                    continue;
-                }
-                fpga_connection_info *f = (fpga_connection_info*)*v;
-                
-                rc = read_fpga_connection(f, cur->fd, 4, err_log);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not handle information from FPGA: %s", f->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                    continue;
-                }
-            }
-            //Make sure no errors occurred while we traversed the active fds
-            if (pfd_arr->error_str != PFD_ARR_SUCC) {
-                    sprintf(errmsg, "pollfd_array_get_active_error: %s", pfd_arr->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-            }
-        }
-        
-        //A little slow but we'll read one character at a time, guarding each
-        //one with the mutexes. For more speed, we should read them out in a 
-        //loop
-        rc = nb_dequeue_single(&q, &c);
-        if (rc > 0) {
-            sched_yield();
-            if (!stop) continue;
-        } else if (rc < 0) {
-            cursor_pos(0,0);
-            sprintf(line, "Error reading from queue. Quitting..." ERASE_TO_END "%n", &len);
-            write(1, line, len);
-            break;
-        }
-        
-        
-        //If user pressed CTRL-D we can quit
-        if (c == '\x04' || stop) {
-            pthread_mutex_lock(&q.mutex);
-            q.num_producers = -1;
-            q.num_consumers = -1;
-            pthread_mutex_unlock(&q.mutex);
-            
-            //This is just desperate...
-            pthread_cond_broadcast(&q.can_prod);
-            pthread_cond_broadcast(&q.can_cons);
-            
-            usleep(1000);
-            
-            //We gave peace a chance, but one of the threads may be blocked in
-            //a read call. We have no choice but to cancel them; I should find
-            //a way to fix this...
-            pthread_cancel(prod);
-            break;
-        } else {
-            ansi_code[ansi_code_pos++] = c;
-            //sprintf(errmsg, "ansi_code_pos = %d", ansi_code_pos);
-            //msg_win_dynamic_append(err_log, errmsg);
-            
-            textio_input in;
-            int rc = textio_getch_cr(c, &in);
-            if (rc == 0) {
-                //Assume we've used the ansi code we've been saving, until
-                //it turns out we didn't
-                int used_ansi_code = 1;
-                
-                switch(in.type) {
-                case TEXTIO_GETCH_PLAIN: {
-                    if (in.c == 12) {
-                        twm_resize_cb(); //This is the callback that textio calls on SIGWINCH events
-                    }
-                }
-                case TEXTIO_GETCH_FN_KEY: {
-                    int dir;
-                    int got_arrow_key = 1;
-                    switch(in.key) {
-                    case TEXTIO_KEY_UP:
-                        dir = TWM_UP;
-                        break;
-                    case TEXTIO_KEY_DOWN:
-                        dir = TWM_DOWN;
-                        break;
-                    case TEXTIO_KEY_LEFT:
-                        dir = TWM_LEFT;
-                        break;
-                    case TEXTIO_KEY_RIGHT:
-                        dir = TWM_RIGHT;
-                        break;
-                    default:
-                        got_arrow_key = 0;
-                        break;
-                    }
-                    
-                    if (got_arrow_key) {
-                        //Let the compiler optimize these predicates
-                        if (in.meta && in.shift && !in.ctrl) {
-                            int rc = twm_tree_move_focused_node(t, dir);
-                            if (rc < 0) {
-                                sprintf(errmsg, "Could not move window: %s", t->error_str);
-                                msg_win_dynamic_append(err_log, errmsg);
-                            }
-                        } else if (in.meta && !in.shift && !in.ctrl) {
-                            int rc = twm_tree_move_focus(t, dir);
-                            if (rc < 0) {
-                                sprintf(errmsg, "Could not move focus: %s", t->error_str);
-                                msg_win_dynamic_append(err_log, errmsg);
-                            }
-                        } else if (!in.meta && in.ctrl) {
-                            dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
-                            if (g) {
-                                if (dir == TWM_UP) dbg_guv_scroll(g, in.shift ? 10: 1);
-                                if (dir == TWM_DOWN) dbg_guv_scroll(g, in.shift ? -10: -1);
-                            }
-                            msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
-                            if (m) {
-                                if (dir == TWM_UP) msg_win_scroll(m, in.shift ? 10: 1);
-                                if (dir == TWM_DOWN) msg_win_scroll(m, in.shift ? -10: -1);
-                            }
-                            
-                            if (g == NULL && m == NULL) {
-                                msg_win_dynamic_append(err_log, "Not a scrollable window");
-                            }
-                        } else {
-                            used_ansi_code = 0;
-                        }
-                    } else {
-                        used_ansi_code = 0;
-                    }
-                    
-                    break;
-                }
-                case TEXTIO_GETCH_ESCSEQ:
-                    switch(in.code) {
-                    case 'q':
-                        rc = twm_tree_remove_focused(t);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not delete window: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    case 'v':
-                        rc = twm_set_stack_dir_focused(t, TWM_VERT);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not set to vertical: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    case 'h':
-                        rc = twm_set_stack_dir_focused(t, TWM_HORZ);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not set to horizontal: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    case 'w':
-                        rc = twm_toggle_stack_dir_focused(t);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not toggle stack direction: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    case 'a':
-                        rc = twm_tree_move_focus(t, TWM_PARENT);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not move focus up: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    case 'z':
-                        rc = twm_tree_move_focus(t, TWM_CHILD);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not move focus down: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
-                        break;
-                    default:
-                        used_ansi_code = 0;
-                        break;
-                    }
-                    break;
-                default:
-                    used_ansi_code = 0;
-                    break;
-                }
-                
-                if (!used_ansi_code) {
-                    ansi_code[ansi_code_pos] = 0;
-                    readline_sendstr(ansi_code);
-                }
-                
-                ansi_code_pos = 0;
-            } else if (rc < 0) {
-                sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
-                msg_win_dynamic_append(err_log, line);
-            }
-        }
-        
-        sched_yield();
-    }
-    
+    //Free list of dummy windows (will delete dummy windows once I'm done
+    //debugging)
+    //TODO: add optional exit function to TWM windows so that we don't have
+    //to maintain a list?
+    //  -> That's pretty easy, so I'll do that later today
     dummy *cur = dummy_head;
     while (cur) {
         dummy *next = cur->next;
@@ -727,6 +625,8 @@ int main(int argc, char **argv) {
         cur = next;
     }
     
+    //Close any open FPGA connections. Technically we don't have to do this,
+    //since Linux will do it anwyay. 
     fci_list *f = fci_head.next;
     while (f != &fci_head) {
         fci_list *next = f->next;
@@ -735,11 +635,11 @@ int main(int argc, char **argv) {
         f = next;
     }
     
+    //Again, technically unnecessary
     free_msg_win_logs(err_log);
     del_msg_win(err_log);
     
-    pthread_join(prod, NULL);
-    
+    //Return the terminal to its original state    
     clean_screen();
     return 0;
 }

@@ -155,5 +155,6 @@ extern char const *const DBG_GUV_SUCC; //= "success";
 extern char const *const DBG_GUV_NULL_ARG; //= "received NULL argument";
 extern char const *const DBG_GUV_NULL_CB; //= "received NULL callback";
 extern char const *const DBG_GUV_NULL_CONN_INFO; //= "received NULL fpga_connection_info";
+extern char const *const DBG_GUV_CNX_CLOSED; //= "external host closed connection";
 
 #endif
