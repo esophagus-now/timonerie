@@ -2,6 +2,7 @@
 #define DBG_GUV_H 1
 
 #include <pthread.h>
+#include <event2/event.h>
 #include "queue.h"
 #include "textio.h"
 #include "twm.h"
@@ -61,7 +62,7 @@ typedef struct _fpga_connection_info {
     struct sockaddr *addr;
     int addr_len;
     int sfd;
-    int sfd_state;
+    struct event *ev; //Event for reading input
     
     //General-purpose buffer, but I only use it for network ingress data
     char buf[FCI_BUF_SIZE];
@@ -123,8 +124,8 @@ void del_fpga_connection(fpga_connection_info *f);
 //desired
 char *append_log(fpga_connection_info *f, int addr, char *log);
 
-//TODO: runtime sizes for the stream?
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w, msg_win *errlog);
+//TODO: runtime sizes for the stream
+int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
 
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed

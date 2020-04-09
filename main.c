@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <event2/event.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "textio.h"
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
@@ -109,6 +110,8 @@ fci_list fci_head = {
     .next = &fci_head
 };
 
+void fpga_conn_cb(new_fpga_cb_info info); //Forward-declare
+
 void got_rl_line(char *str) {    
     cursor_pos(1,2);
     char line[80];
@@ -152,7 +155,7 @@ void got_rl_line(char *str) {
                 break;
             }
             
-            rc = new_fpga_connection(callback, cmd.node, cmd.serv, e);
+            rc = new_fpga_connection(fpga_conn_cb, cmd.node, cmd.serv, e);
             if (rc < 0) {
                 msg_win_dynamic_append(err_log, "Could not open FPGA connection");
             }
@@ -348,8 +351,9 @@ void twm_resize_cb(void) {
 void draw_cb(evutil_socket_t fd, short what, void *arg) {
     pthread_mutex_lock(&t_mutex);
     
-    rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
+    int rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
     if (rc < 0) {
+        char errmsg[80];
         sprintf(errmsg, "Could not draw tree: %s", t->error_str);
         msg_win_dynamic_append(err_log, errmsg);
     } else if (rc > 0) {
@@ -362,12 +366,12 @@ void draw_cb(evutil_socket_t fd, short what, void *arg) {
 void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
     fpga_connection_info *f = arg;
     
-    rc = read_fpga_connection(f, cur->fd, 4, err_log);
+    int rc = read_fpga_connection(f, f->sfd, 4);
     if (rc < 0) {
         char errmsg[80];
         sprintf(errmsg, "Could not read from FPGA: %s", f->error_str);
         msg_win_dynamic_append(err_log, errmsg);
-        event_del(args->me);
+        event_del(f->ev);
         //TODO: properly close out FCI; free its resources, remove its
         //windows from the TWM, remove its IDs, and remove it from the 
         //global list to free on program exit
@@ -375,7 +379,10 @@ void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
 }
 
 void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
-    event_base *base = arg;
+    //Although it's a global, this function takes the event_base as the arg
+    //It just means that I won't have to update this function if I find a
+    //nice way to get rid of the global variables
+    struct event_base *base = arg;
     
     //Sometimes timonerie uses a special key. However, if it doesn't use it,
     //we should pass it to readline
@@ -531,8 +538,8 @@ void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
         
         ansi_code_pos = 0;
     } else if (rc < 0) {
-        sprintf(line, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
-        msg_win_dynamic_append(err_log, line);
+        sprintf(errmsg, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
+        msg_win_dynamic_append(err_log, errmsg);
     }
 }
 
@@ -564,14 +571,13 @@ void fpga_conn_cb(new_fpga_cb_info info) {
     //Hook up a new event to read data from the connection
     struct event *read_ev = event_new(ev_base, f->sfd, EV_READ | EV_PERSIST, fpga_read_cb, f);
     event_add(read_ev, NULL);
+    f->ev = read_ev;
     
     sym_dat(e, sem_val*)->type = SYM_FCI;
     sym_dat(e, sem_val*)->v = f;
 }
 
 int main(int argc, char **argv) {    
-    int rc;
-    
     //Setup the TWM screen
     atexit(clean_screen);
     term_init(0);
@@ -592,7 +598,7 @@ int main(int argc, char **argv) {
     err_log = new_msg_win("Message Window");
     
     pthread_mutex_lock(&t_mutex);
-    rc = twm_tree_add_window(t, err_log, msg_win_draw_ops);
+    twm_tree_add_window(t, err_log, msg_win_draw_ops);
     pthread_mutex_unlock(&t_mutex);
     
     //Set up libevent. I ended up just making the base a global; it was a 
@@ -604,14 +610,14 @@ int main(int argc, char **argv) {
     event_add(input_ev, NULL);
     
     //Event for perdiocally drawing the TWM every 50 ms
-    struct event *draw_ev = event_new(ev_base, -1, EV_TIMEOUT | EV_PERSISR, draw_cb, NULL);
-    event_add(input_ev, (struct timeval[1]){{0, 50*1000}});
+    struct event *draw_ev = event_new(ev_base, -1, EV_TIMEOUT | EV_PERSIST, draw_cb, NULL);
+    event_add(draw_ev, (struct timeval[1]){{0, 50*1000}});
     
     //Events for reading from FPGA connections are added by fpga_conn_cb, 
     //which is triggered when a connection is succesfully opened 
     
     //Main event loop
-    event_loop_dispatch(ev_base);
+    event_base_dispatch(ev_base);
     
     //Free list of dummy windows (will delete dummy windows once I'm done
     //debugging)
