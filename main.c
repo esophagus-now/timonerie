@@ -17,68 +17,11 @@
 
 #define write_const_str(x) write(1, x, sizeof(x))
 
-typedef struct _dummy {
-    int need_redraw;
-    int colour;
-    struct _dummy *next;
-} dummy;
-
-dummy *dummy_head = NULL;
-
-static int dummy_col = 40;
-
-int draw_fn_dummy(void *item, int x, int y, int w, int h, char *buf) {
-    dummy *d = (dummy*) item;
-    if (d == NULL) return -1;
-    
-    if (!d->need_redraw) return 0;
-    
-    char *buf_saved = buf;
-    
-    int incr;
-    sprintf(buf, "\e[%dm%n", d->colour, &incr);
-    buf += incr;
-    
-    int i;
-    for (i = y; i < y+h; i++) {
-        incr = cursor_pos_cmd(buf, x, i);
-        buf += incr;
-        int j;
-        for (j = 0; j < w; j++) *buf++ = '*';
-    }
-    
-    sprintf(buf, "\e[49m%n", &incr);
-    buf += incr;
-    
-    d->need_redraw = 0;
-    
-    return buf - buf_saved;
-}
-
-int draw_sz_dummy(void *item, int w, int h) {
-    dummy *d = (dummy*) item;
-    if (d == NULL) return -1;
-    
-    if (!d->need_redraw) return 0;
-    
-    return 10 + h*(10 + w);
-}
-
-void trigger_redraw_dummy(void *item) {
-    dummy *d = (dummy*) item;
-    if (d == NULL) return;
-    
-    d->need_redraw = 1;
-}
-
-draw_operations const dummy_ops = {
-    draw_fn_dummy,
-    draw_sz_dummy,
-    trigger_redraw_dummy
-};
-    
 //This is the window that shows messages going by
 msg_win *err_log = NULL;
+
+//Include temprary TWM exercise code
+#include "TEMPORARY.txt"
 
 twm_tree *t = NULL; 
 pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -260,8 +203,6 @@ void got_rl_line(char *str) {
             d->colour = dummy_col++;
             if (dummy_col == 47) dummy_col = 40;
             d->need_redraw = 1;
-            d->next = dummy_head;
-            dummy_head = d;
             twm_tree_add_window(t, d, dummy_ops);
             return;
         }
@@ -618,18 +559,6 @@ int main(int argc, char **argv) {
     
     //Main event loop
     event_base_dispatch(ev_base);
-    
-    //Free list of dummy windows (will delete dummy windows once I'm done
-    //debugging)
-    //TODO: add optional exit function to TWM windows so that we don't have
-    //to maintain a list?
-    //  -> That's pretty easy, so I'll do that later today
-    dummy *cur = dummy_head;
-    while (cur) {
-        dummy *next = cur->next;
-        free(cur);
-        cur = next;
-    }
     
     //Close any open FPGA connections. Technically we don't have to do this,
     //since Linux will do it anwyay. 

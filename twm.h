@@ -41,11 +41,16 @@ typedef int draw_sz_t(void *item, int w, int h);
 //area of the screen
 typedef void trigger_redraw_t(void *item);
 
+//Optionally, a TWM window can hook up this callback that is called when the
+//window is removed
+typedef void twm_exit_fn(void *item);
+
 //All drawable items must implement this interface
 typedef struct _draw_operations {
     draw_fn_t *draw_fn;
     draw_sz_t *draw_sz;
     trigger_redraw_t *trigger_redraw;
+    twm_exit_fn *exit;
 } draw_operations;
 
 typedef enum _twm_node_type {

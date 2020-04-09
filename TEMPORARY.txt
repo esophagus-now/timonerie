@@ -1,0 +1,72 @@
+//I only use this for debugging the TWM
+typedef struct _dummy {
+    int need_redraw;
+    int colour;
+} dummy;
+
+static int dummy_col = 40;
+
+int draw_fn_dummy(void *item, int x, int y, int w, int h, char *buf) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return -1;
+    
+    if (!d->need_redraw) return 0;
+    
+    char *buf_saved = buf;
+    
+    int incr;
+    sprintf(buf, "\e[%dm%n", d->colour, &incr);
+    buf += incr;
+    
+    int i;
+    for (i = y; i < y+h; i++) {
+        incr = cursor_pos_cmd(buf, x, i);
+        buf += incr;
+        int j;
+        for (j = 0; j < w; j++) *buf++ = '*';
+    }
+    
+    sprintf(buf, "\e[49m%n", &incr);
+    buf += incr;
+    
+    d->need_redraw = 0;
+    
+    return buf - buf_saved;
+}
+
+int draw_sz_dummy(void *item, int w, int h) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return -1;
+    
+    if (!d->need_redraw) return 0;
+    
+    return 10 + h*(10 + w);
+}
+
+void trigger_redraw_dummy(void *item) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) return;
+    
+    d->need_redraw = 1;
+}
+
+void exit_dummy(void *item) {
+    dummy *d = (dummy*) item;
+    if (d == NULL) {
+        char errmsg[80];
+        sprintf(errmsg, "UH OH Trying to free a NULL dummy!");
+        msg_win_dynamic_append(err_log, errmsg);
+    } else {
+        char errmsg[80];
+        sprintf(errmsg, "free()ing a dummy!");
+        msg_win_dynamic_append(err_log, errmsg);
+        free(d);
+    }
+}
+
+draw_operations const dummy_ops = {
+    draw_fn_dummy,
+    draw_sz_dummy,
+    trigger_redraw_dummy,
+    exit_dummy
+};

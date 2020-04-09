@@ -474,5 +474,6 @@ void dbg_guv_scroll(dbg_guv *d, int amount) {
 draw_operations const dbg_guv_draw_ops = {
     draw_fn_dbg_guv,
     draw_sz_dbg_guv,
-    trigger_redraw_dbg_guv
+    trigger_redraw_dbg_guv,
+    NULL //No exit function needed
 };

@@ -378,10 +378,12 @@ static twm_node* construct_twm_node(twm_node_type type) {
     return ret;
 }
 
-//Free twm_node. Gracefully ignores NULL
+//Free twm_node, and if it is a leaf, calls the item's exit callback (if
+//one was provided). Gracefully ignores NULL input
 static void destroy_twm_node(twm_node *t) {
     if (t == NULL) return;
     
+    if (t->type == TWM_LEAF && t->draw_ops.exit != NULL) t->draw_ops.exit(t->item);
     free(t);
 }
 
@@ -390,7 +392,7 @@ static void free_twm_node_tree(twm_node *head) {
     if (head == NULL) return;
     
     if (head->type == TWM_LEAF) {
-        free(head);
+        destroy_twm_node(head);
         return;
     } else {
         int i;
@@ -468,7 +470,8 @@ static void trigger_redraw_empty(void *item) {return;}
 draw_operations const empty_ops = {
     .draw_fn = draw_fn_empty,
     .draw_sz = draw_sz_empty,
-    .trigger_redraw = trigger_redraw_empty
+    .trigger_redraw = trigger_redraw_empty,
+    .exit = NULL
 };
 
 //Returns a new twm_tree on success, NULL on error
