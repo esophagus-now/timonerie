@@ -1757,6 +1757,11 @@ int twm_tree_focus_item(twm_tree *t, void *item) {
         return -2;
     }
     
+    if (t->head == NULL) {
+        t->error_str = TWM_NOT_FOUND;
+        return -1;
+    }
+    
     twm_node *new_focus = find_item(t, t->head, item);
     if (new_focus == NULL) {
         return -1; //t->error_str is already set
