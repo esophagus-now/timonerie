@@ -74,6 +74,8 @@ void got_rl_line(char *str) {
         
         switch(cmd.type) {
         case CMD_OPEN: {
+            //TODO: check if user mistakenly reopens an existing connection
+            
             symtab_entry *e = symtab_lookup(ids, cmd.id);
             if (e != NULL) {
                 cursor_pos(1, term_rows - 1);
@@ -148,6 +150,7 @@ void got_rl_line(char *str) {
                 break;
             }
             
+            
             dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
             if (g == NULL) {
                 cursor_pos(1, term_rows-1);
@@ -155,6 +158,20 @@ void got_rl_line(char *str) {
                 write(1, line, len);
                 return;
             } 
+            
+            //Check if this dbg_guv already has a name
+            e = symtab_lookup(ids, g->name);
+            if (e) {
+                //Remove old name
+                int rc = symtab_array_remove(ids, e);
+                if (rc < 0) {
+                    sprintf(line, "Could not remove old name: %s", ids->error_str);
+                    msg_win_dynamic_append(err_log, line);
+                }
+            } else if (ids->error_str != SYMTAB_NOT_FOUND) {
+                sprintf(line, "Error in symbol table: %s", ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+            }
             
             dbg_guv_set_name(g, cmd.id);
             
