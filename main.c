@@ -316,6 +316,7 @@ void got_rl_line(char *str) {
                 if (rc < 0) {
                     //For once I won't put it in the message window, since
                     //the user wouldn't see it!
+                    cursor_pos(1, term_rows - 1);
                     char line[80];
                     int len;
                     sprintf(line, "Could not show message window: %s" ERASE_TO_END "%n", t->error_str, &len);
@@ -325,6 +326,7 @@ void got_rl_line(char *str) {
             } else if (rc < 0) {
                 //For once I won't put it in the message window, since
                 //the might not see it!
+                cursor_pos(1, term_rows - 1);
                 char line[80];
                 int len;
                 sprintf(line, "Could not focus message window: %s" ERASE_TO_END "%n", t->error_str, &len);
@@ -414,6 +416,17 @@ void got_rl_line(char *str) {
     free(str);
 }
 
+void twm_resize_cb(void) {                        
+    int rc = twm_tree_redraw(t);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not issue redraw: %s", t->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+    }
+    
+    readline_redisplay();
+}
+
 //Don't forget: callbacks for when SIGWINCH is signalled
 
 int main(int argc, char **argv) {    
@@ -427,6 +440,8 @@ int main(int argc, char **argv) {
     if (!t) {
         return -1;
     }
+    
+    set_resize_cb(twm_resize_cb);
     
     //Set up thread that reads from keyboard/mouse. This will disappear soon
     //once I set up the call to poll() in the main event loop
@@ -453,9 +468,9 @@ int main(int argc, char **argv) {
     int len = 0;
     
     //Draw initial message
-    cursor_pos(1, term_rows - 1);
-    sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
-    write(1, line, len);
+    //cursor_pos(1, term_rows);
+    //sprintf(line, "Soyez la bienvenue à la timonerie" ERASE_TO_END "%n", &len);
+    //write(1, line, len);
     
     //Main event loop
     char ansi_code[16];
@@ -574,11 +589,7 @@ int main(int argc, char **argv) {
                 switch(in.type) {
                 case TEXTIO_GETCH_PLAIN: {
                     if (in.c == 12) {
-                        int rc = twm_tree_redraw(t);
-                        if (rc < 0) {
-                            sprintf(errmsg, "Could not issue redraw: %s", t->error_str);
-                            msg_win_dynamic_append(err_log, errmsg);
-                        }
+                        twm_resize_cb(); //This is the callback that textio calls on SIGWINCH events
                     }
                 }
                 case TEXTIO_GETCH_FN_KEY: {
@@ -694,21 +705,7 @@ int main(int argc, char **argv) {
                     break;
                 }
                 
-                //sprintf(errmsg, "used_ansi_code = %d", used_ansi_code);
-                //msg_win_dynamic_append(err_log, errmsg);
-                
                 if (!used_ansi_code) {
-                    /*int pos = 0;
-                    int tmp;
-                    sprintf(errmsg + pos, "Passing (%d) %n", ansi_code_pos, &tmp);
-                    pos += tmp;
-                    int i;
-                    for (i = 0; i < ansi_code_pos; i++) {
-                        sprintf(errmsg + pos, "%02x %n", +ansi_code[i] & 0xFF, &tmp);
-                        pos += tmp;
-                    }
-                    sprintf(errmsg + pos, "to readline");
-                    msg_win_dynamic_append(err_log, errmsg);*/
                     ansi_code[ansi_code_pos] = 0;
                     readline_sendstr(ansi_code);
                 }
@@ -742,9 +739,6 @@ int main(int argc, char **argv) {
     del_msg_win(err_log);
     
     pthread_join(prod, NULL);
-#ifdef DEBUG_ON
-    fprintf(stderr, "Joined prod\n");
-#endif
     
     clean_screen();
     return 0;

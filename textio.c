@@ -52,6 +52,14 @@ char const *const TEXTIO_OOM = "out of memory";
 char const *const TEXTIO_MSG_WIN_TOO_SMALL = "message window too small";
 char const *const TEXTIO_OOB = "out of bounds";
 
+static win_resize_cb *resize_cb = NULL;
+
+//This function will be called inside the SIGWINCH handler managed by textio.
+//Pass NULL to remove the callback
+void set_resize_cb(win_resize_cb *cb) {
+    resize_cb = cb;
+}
+
 void cursor_pos(int x, int y) {
     char line[80];
     int len;
@@ -73,6 +81,8 @@ static void get_term_sz() {
     
     term_rows = w.ws_row;
     term_cols = w.ws_col;
+    
+    if (resize_cb != NULL) resize_cb();
 }
 
 //Returns 0 on success, -1 on error

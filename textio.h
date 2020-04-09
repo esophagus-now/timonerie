@@ -130,12 +130,18 @@ typedef struct _textio_input{
     char expected;
 } textio_input;
 
+typedef void win_resize_cb(void);
+
 //////////////
 //Prototypes//
 //////////////
 
 //TODO: make this less hacky
 extern int term_rows, term_cols;
+
+//This function will be called inside the SIGWINCH handler managed by textio.
+//Pass NULL to remove the callback
+void set_resize_cb(win_resize_cb *cb);
 
 void cursor_pos(int x, int y);
 

@@ -1781,6 +1781,11 @@ int twm_tree_redraw(twm_tree *t) {
         return -2; //This is all we can do
     }
     
+    if (t->head == NULL) {
+        t->error_str = TWM_NO_WINDOWS;
+        return -1;
+    }
+    
     int rc = redraw_twm_node_tree(t->head);
     if (rc < 0) {
         //Propagate error code
