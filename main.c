@@ -363,7 +363,10 @@ void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
     
     ansi_code[ansi_code_pos++] = c;
     
-    textio_input in;
+    static textio_input in; //VERY subtle! I forgot that textio_getch_cr
+    //saves some state inside the textio_input struct. TODO: maybe fix
+    //textio_getch_cr so that it maintains a local textio_input for its
+    //state then only copies it out on a match
     int rc = textio_getch_cr(c, &in);
     if (rc == 0) {
         //Assume we've used the ansi code we've been saving, until
