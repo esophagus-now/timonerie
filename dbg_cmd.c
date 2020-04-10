@@ -26,7 +26,7 @@ char const *DBG_CMD_NAMES[] = {
 //Each returns the number of bytes read from str. On error, return -1 and
 //set dest->error_str appropriately
 
-static int skip_whitespace(dbg_cmd *dest, char const *str) {
+int skip_whitespace(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -46,7 +46,7 @@ static int skip_whitespace(dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
-static int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
+int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -77,7 +77,7 @@ static int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
     return (endptr - str);
 }
 
-static int parse_param(dbg_cmd *dest, char const *str) {
+int parse_param(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -108,7 +108,7 @@ static int parse_param(dbg_cmd *dest, char const *str) {
     return (endptr - str);
 }
 
-static int parse_action(dbg_cmd *dest, char const *str) {
+int parse_action(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -253,7 +253,7 @@ static int parse_action(dbg_cmd *dest, char const *str) {
     return -1;
 }
 
-static int parse_eos (dbg_cmd *dest, char const *str) {
+int parse_eos (dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -452,7 +452,7 @@ static int parse_name_cmd(dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
-static int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str) {
+int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -515,14 +515,17 @@ static cmd_info builtin_cmds[] = {
     {"name",	parse_name_cmd},	   //Rename active dbg_guv
     {"msg",	    parse_CMD_MSG},	       //Focus message window
     {"quit",    parse_CMD_QUIT},       //End timonerie session
+    {"exit",    parse_CMD_QUIT},       //End timonerie session
     //Command for deleting a name?
 };
 #define num_builtin_cmds (sizeof(builtin_cmds)/sizeof(*builtin_cmds))
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
-//(unless dest is NULL, of course). On success returns 0.
-int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
+//(unless dest is NULL, of course). On success returns 0. The active 
+//dbg_guv is passed in (or NULL if there are no active guvs) in case the
+//guv has its own command interpreter
+int parse_dbg_cmd(dbg_cmd *dest, char const *str, dbg_guv *active) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -531,42 +534,33 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    int num_read = skip_whitespace(dest, str);
-    if (num_read < 0) {
-        return -1; //dest->error_str already set
-    }
-    str += num_read;
-    
-    //Special case: try reading an action. If it fails we default to the
-    //usual command entering methods
-    int rc = parse_dbg_reg_cmd(dest, str);
-    if (rc == 0) {
-        //We're good! Don't bother trying to match a command in the list;
-        //we've already succesfully parsed a dbg_reg command
-        return 0;
-    }
-    
+    int num_read = 0;
     //Check which command this is
     char cmd[16];
-    rc = sscanf(str, "%15s%n", cmd, &num_read);
+    int rc = sscanf(str, "%15s%n", cmd, &num_read);
     if (rc < 1) {
         dest->error_str = DBG_CMD_EXP_OP;
         return -1;
     }
     
-    
-    str += num_read;
-    
     //Do a boring old linear search. Slow, but who cares?
     int i;
     for (i = 0; i < num_builtin_cmds; i++) {
         if(!strcmp(cmd, builtin_cmds[i].cmd)) {
-            rc = builtin_cmds[i].fn(dest, str);
+            rc = builtin_cmds[i].fn(dest, str + num_read);
             if (rc < 0) {
                 return -1; //dest->error_str already set
             }
             
             return 0;
+        }
+    }
+   
+    //At this point, we did not match a built-in command. Now see if there
+    //is an active dbg_guv, and ask it if it can use this command string
+    if (active != NULL) {
+        if (active->ops.got_line != NULL) {
+            return active->ops.got_line(active, str, dest);
         }
     }
    

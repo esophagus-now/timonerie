@@ -10,6 +10,7 @@
 #include <event2/event.h>
 #include <pthread.h>
 #include <unistd.h>
+#include "timonier.h"
 #include "textio.h"
 #include "dbg_guv.h"
 #include "dbg_cmd.h"
@@ -62,7 +63,10 @@ void got_rl_line(char *str) {
     /* If the line has any text in it, save it on the history. */
     if (str && *str) {
         dbg_cmd cmd;
-        int rc = parse_dbg_cmd(&cmd, str);
+        //Try to find active dbg_guv
+        dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+        
+        int rc = parse_dbg_cmd(&cmd, str, g);
         if (rc < 0) {
             cursor_pos(1, term_rows-1);
             sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
@@ -143,21 +147,19 @@ void got_rl_line(char *str) {
             break;
         }
         case CMD_NAME: {
-            symtab_entry *e = symtab_lookup(ids, cmd.id);
-            if (e != NULL) {
-                cursor_pos(1, term_rows - 1);
-                write_const_str("This ID is already in use" ERASE_TO_END);
-                break;
-            }
-            
-            
-            dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
             if (g == NULL) {
                 cursor_pos(1, term_rows-1);
                 sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
                 return;
             } 
+            
+            symtab_entry *e = symtab_lookup(ids, cmd.id);
+            if (e != NULL) {
+                cursor_pos(1, term_rows - 1);
+                write_const_str("This ID is already in use" ERASE_TO_END);
+                break;
+            }
             
             //Check if this dbg_guv already has a name
             e = symtab_lookup(ids, g->name);
@@ -228,15 +230,14 @@ void got_rl_line(char *str) {
             event_base_loopbreak(ev_base);
             break;
         case CMD_DBG_REG: {
-            int dbg_guv_addr;
-            dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
             if (g == NULL) {
                 cursor_pos(1, term_rows-1);
                 sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
                 return;
             } 
-            dbg_guv_addr = g->addr;
+            
+            int dbg_guv_addr = g->addr;
             
             cursor_pos(1, term_rows-1);
             if (cmd.reg == LATCH) {

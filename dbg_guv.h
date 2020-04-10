@@ -6,6 +6,27 @@
 #include "queue.h"
 #include "textio.h"
 #include "twm.h"
+#include "dbg_cmd.h"
+
+struct _dbg_cmd; //This is a more serious circular reference... fix?
+
+struct _dbg_guv; //Fix circular reference
+
+//If the user types in a command which is not one of the builtins, the 
+//entire command is instead sent to the focused dbg_guv window. The dbg_cmd
+//struct is used in case this timonier wants to
+//use one of the builtin functions (and for returning errors)
+typedef int guv_got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg_cmd *dest);
+
+//A timonier may choose to occupy some of the lines inside of a dbg_guv 
+//window, and smart timoniers may use fewer lines if the window is smaller
+typedef int lines_req_fn(struct _dbg_guv *owner, int w, int h);
+
+typedef struct _guv_operations {
+    guv_got_line_fn *got_line;
+    lines_req_fn *lines_req;
+    draw_operations draw_ops;
+} guv_operations;
 
 //To fix circular definition of dbg_guv and fpga_connection_info
 struct _fpga_connection_info;
@@ -42,6 +63,12 @@ typedef struct _dbg_guv {
     //Additional information from command receipt
     unsigned inj_failed;
     unsigned dout_not_rdy_cnt;
+    
+    //The user can select one of several modes for operating the dbg_guv.
+    //This is done by passing a set of function pointers into the dbg_guv
+    //struct that will get triggered at various times
+    guv_operations ops;
+    void *manager;
     
     //Address information for this dbg_guv
     struct _fpga_connection_info *parent;

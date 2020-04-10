@@ -3,6 +3,9 @@
 #include "dbg_guv.h"
 #include "symtab.h"
 
+//Fixes an ugly circular reference
+struct _dbg_guv;
+
 //The trick here is that the register names will match to the correct
 //register address in the enum.
 #define DBG_GUV_REG_IDENTS \
@@ -32,6 +35,7 @@
     X(CMD_DBG_REG),\
     X(CMD_MSG),\
     X(CMD_QUIT),\
+    X(CMD_HANDLED)
     
 
 #define X(x) x
@@ -73,10 +77,29 @@ typedef struct _dbg_cmd {
 
 typedef int parse_fn(dbg_cmd *dest, char const *str);
 
+//Functions for each terminal in the grammar
+//Each returns the number of bytes read from str. On error, return -1 and
+//set dest->error_str appropriately
+
+int skip_whitespace(dbg_cmd *dest, char const *str);
+
+int parse_dbg_guv_addr(dbg_cmd *dest, char const *str);
+
+int parse_param(dbg_cmd *dest, char const *str);
+
+int parse_action(dbg_cmd *dest, char const *str);
+
+int parse_eos (dbg_cmd *dest, char const *str);
+
+//Just needed to export this one to let the timoniers use it
+int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str);
+
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
-//(unless dest is NULL, of course). Otherwise returns 0.
-int parse_dbg_cmd(dbg_cmd *dest, char const *str);
+//(unless dest is NULL, of course). On success returns 0. The active 
+//dbg_guv is passed in (or NULL if there are no active guvs) in case the
+//guv has its own command interpreter
+int parse_dbg_cmd(dbg_cmd *dest, char const *str, struct _dbg_guv *active);
 
 
 //////////////////////////////////////////////////

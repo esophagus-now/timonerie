@@ -11,6 +11,7 @@
 #include "dbg_guv.h"
 #include "textio.h"
 #include "queue.h"
+#include "timonier.h"
 
 char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
@@ -65,6 +66,8 @@ static void init_dbg_guv(dbg_guv *d, fpga_connection_info *f, int addr) {
     d->values_unknown = 1;
     d->parent = f;
     d->addr = addr;
+    
+    d->ops = default_guv_ops;
 } 
 
 static void deinit_dbg_guv(dbg_guv *d) {
