@@ -393,8 +393,11 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
             return -1; //dest->error_str already set
         }
         
+        dest->has_guv_addr = 1;
         num_read += incr;
         str += incr;
+    } else {
+        dest->has_guv_addr = 0;
     }
     
     incr = skip_whitespace(dest, str);

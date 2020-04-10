@@ -19,6 +19,12 @@
 
 #define ERASE_TO_END CSI "K"
 
+#define UNDERLINE CSI "4m"
+#define NO_UNDERLINE CSI "24m"
+
+#define BOLD CSI "1m"
+#define NO_BOLD CSI "22m"
+
 #define REPORT_CURSOR_ON "\x1b[?1003h"
 #define LEN_REPORT_CURSOR_ON 8
 

@@ -581,6 +581,9 @@ int main(int argc, char **argv) {
     //Main event loop
     event_base_dispatch(ev_base);
     
+    //Make sure we don't confuse valgrind
+    libevent_global_shutdown();
+    
     //Close any open FPGA connections. Technically we don't have to do this,
     //since Linux will do it anwyay. 
     fci_list *f = fci_head.next;

@@ -285,7 +285,7 @@ int draw_sz_twm_node(void *item, int w, int h) {
         
         if (child_drawn && t->has_focus) {
             total_sz += 7; //Extra characters needed to turn on highlight and
-                           //ten turn it off afterwards
+                           //then turn it off afterwards
         }
         
         t->error_str = TWM_SUCC;
