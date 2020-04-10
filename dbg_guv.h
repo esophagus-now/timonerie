@@ -91,6 +91,9 @@ typedef struct _fpga_connection_info {
     int sfd;
     struct event *ev; //Event for reading input
     
+    //Name used in symbol table
+    char *name;
+    
     //General-purpose buffer, but I only use it for network ingress data
     char buf[FCI_BUF_SIZE];
     int buf_pos;

@@ -1644,6 +1644,12 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
                     tree->error_str = TWM_INVALID_TREE;
                     return -1;
                 }
+                //In this case we leave the tree empty
+                destroy_twm_node(t);
+                tree->head = NULL;
+                tree->focus = NULL;
+                tree->error_str = TWM_SUCC;
+                return 0;
             }
             
             int ind = twm_node_indexof(t, parent);

@@ -280,6 +280,8 @@ void del_fpga_connection(fpga_connection_info *f) {
         deinit_dbg_guv(&f->guvs[i]);
     }
     
+    if (f->name) free(f->name);
+    
     free(f);
 }
 

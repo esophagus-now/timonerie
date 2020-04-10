@@ -80,6 +80,8 @@ void got_rl_line(char *str) {
         case CMD_OPEN: {
             //TODO: check if user mistakenly reopens an existing connection
             
+            msg_win_dynamic_append(err_log, strdup("Warning: no one is making sure you don't open a connection twice"));
+            
             symtab_entry *e = symtab_lookup(ids, cmd.id);
             if (e != NULL) {
                 cursor_pos(1, term_rows - 1);
@@ -328,12 +330,40 @@ void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
     int rc = read_fpga_connection(f, f->sfd, 4);
     if (rc < 0) {
         char errmsg[80];
-        sprintf(errmsg, "Could not read from FPGA: %s", f->error_str);
+        sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
         msg_win_dynamic_append(err_log, errmsg);
         event_del(f->ev);
-        //TODO: properly close out FCI; free its resources, remove its
-        //windows from the TWM, remove its IDs, and remove it from the 
-        //global list to free on program exit
+        
+        int i;
+        for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
+            //Whatever, don't bother error-checking
+            dbg_guv *g = f->guvs + i;
+            //Release ID
+            symtab_entry *e = symtab_lookup(ids, g->name);
+            if (e) symtab_array_remove(ids, e);
+            //Close windows
+            twm_tree_remove_item(t, g);
+        }
+        
+        //Free this FPGA's ID
+        if (f->name) {
+            symtab_entry *e = symtab_lookup(ids, f->name);
+            if (e) symtab_array_remove(ids, e);
+        }
+        
+        //Remove from global list of opened connections
+        fci_list *cur = fci_head.next;
+        while (cur != &fci_head) {
+            if (cur->f == f) {
+                cur->prev->next = cur->next;
+                cur->next->prev = cur->prev;
+                free(cur);
+                break;
+            } else {
+                cur = cur->next;
+            }
+        }
+        del_fpga_connection(f);
     }
 }
 
@@ -535,8 +565,10 @@ void fpga_conn_cb(new_fpga_cb_info info) {
     event_add(read_ev, NULL);
     f->ev = read_ev;
     
+    //Set symbol and save name
     sym_dat(e, sem_val*)->type = SYM_FCI;
     sym_dat(e, sem_val*)->v = f;
+    f->name = strdup(e->sym);
 }
 
 int main(int argc, char **argv) {    
