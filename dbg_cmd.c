@@ -46,6 +46,23 @@ int skip_whitespace(dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
+//Copy a string into at most n bytes in buf, which must have an additional
+//byte of space for the NUL character. Returns the number of characters read
+//on success or -1 on error
+int parse_strn(char *buf, int n, char const *str) {
+    int num_read;
+    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
+        buf,
+        &num_read
+    );
+    
+    if (rc != 1) {
+        return -1;
+    } else {
+        return num_read;
+    }
+}
+
 int parse_dbg_guv_addr(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
@@ -327,18 +344,16 @@ static int parse_close_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    int num_read;
-    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
-        dest->id,
-        &num_read
-    );
+    int num_read = 0;
+    int rc = parse_strn(dest->id, MAX_STR_PARAM_SIZE, str);
     
-    if (rc != 1) {
+    if (rc < 0) {
         dest->error_str = DBG_CMD_CLOSE_USAGE;
         return -1;
     }
     
-    str += num_read;
+    num_read += rc;
+    str += rc;
     
     rc = parse_eos(dest, str);
     if (rc < 0) {

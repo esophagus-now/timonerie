@@ -56,6 +56,42 @@ fci_list fci_head = {
 
 void fpga_conn_cb(new_fpga_cb_info info); //Forward-declare
 
+void cleanup_fpga_connection(fpga_connection_info *f) {
+    event_del(f->ev);
+    
+    int i;
+    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
+        //Whatever, don't bother error-checking
+        dbg_guv *g = f->guvs + i;
+        //Release ID
+        symtab_entry *e = symtab_lookup(ids, g->name);
+        if (e) symtab_array_remove(ids, e);
+        //Close windows
+        twm_tree_remove_item(t, g);
+    }
+    
+    //Free this FPGA's ID
+    if (f->name) {
+        symtab_entry *e = symtab_lookup(ids, f->name);
+        if (e) symtab_array_remove(ids, e);
+    }
+    
+    //Remove from global list of opened connections
+    fci_list *cur = fci_head.next;
+    while (cur != &fci_head) {
+        if (cur->f == f) {
+            cur->prev->next = cur->next;
+            cur->next->prev = cur->prev;
+            free(cur);
+            break;
+        } else {
+            cur = cur->next;
+        }
+    }
+    
+    del_fpga_connection(f);
+}
+
 void got_rl_line(char *str) {    
     cursor_pos(1,2);
     char line[80];
@@ -80,7 +116,7 @@ void got_rl_line(char *str) {
         case CMD_OPEN: {
             //TODO: check if user mistakenly reopens an existing connection
             
-            msg_win_dynamic_append(err_log, strdup("Warning: no one is making sure you don't open a connection twice"));
+            msg_win_dynamic_append(err_log, "Warning: no one is making sure you don't open a connection twice");
             
             symtab_entry *e = symtab_lookup(ids, cmd.id);
             if (e != NULL) {
@@ -109,6 +145,28 @@ void got_rl_line(char *str) {
             rc = new_fpga_connection(fpga_conn_cb, cmd.node, cmd.serv, e);
             if (rc < 0) {
                 msg_win_dynamic_append(err_log, "Could not open FPGA connection");
+            }
+            break;
+        }
+        case CMD_CLOSE: {
+            symtab_entry *e = symtab_lookup(ids, cmd.id);
+            if (!e) {
+                char line[120];
+                sprintf(line, "Could not find [%s]: %s", cmd.id, ids->error_str);
+                msg_win_dynamic_append(err_log, line);
+                break;
+            }
+            if (sym_dat(e, sem_val*)->type == SYM_FCI) {
+                fpga_connection_info *f = sym_dat(e, sem_val*)->v;
+                cleanup_fpga_connection(f);
+            } else {
+                dbg_guv *g = sym_dat(e, sem_val*)->v;
+                int rc = twm_tree_remove_item(t, g);
+                if (rc < 0) {
+                    char line[80];
+                    sprintf(line, "Error closing dbg_guv window: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, line);
+                }
             }
             break;
         }
@@ -332,38 +390,7 @@ void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
         char errmsg[80];
         sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
         msg_win_dynamic_append(err_log, errmsg);
-        event_del(f->ev);
-        
-        int i;
-        for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-            //Whatever, don't bother error-checking
-            dbg_guv *g = f->guvs + i;
-            //Release ID
-            symtab_entry *e = symtab_lookup(ids, g->name);
-            if (e) symtab_array_remove(ids, e);
-            //Close windows
-            twm_tree_remove_item(t, g);
-        }
-        
-        //Free this FPGA's ID
-        if (f->name) {
-            symtab_entry *e = symtab_lookup(ids, f->name);
-            if (e) symtab_array_remove(ids, e);
-        }
-        
-        //Remove from global list of opened connections
-        fci_list *cur = fci_head.next;
-        while (cur != &fci_head) {
-            if (cur->f == f) {
-                cur->prev->next = cur->next;
-                cur->next->prev = cur->prev;
-                free(cur);
-                break;
-            } else {
-                cur = cur->next;
-            }
-        }
-        del_fpga_connection(f);
+        cleanup_fpga_connection(f);
     }
 }
 
@@ -613,8 +640,6 @@ int main(int argc, char **argv) {
     //Main event loop
     event_base_dispatch(ev_base);
     
-    //Make sure we don't confuse valgrind
-    libevent_global_shutdown();
     
     //Close any open FPGA connections. Technically we don't have to do this,
     //since Linux will do it anwyay. 
@@ -625,6 +650,14 @@ int main(int argc, char **argv) {
         free(f);
         f = next;
     }
+    
+    //Make sure we don't confuse valgrind
+    libevent_global_shutdown();
+    
+    //Just keep clearing things up. Unnecessary, but it separates the chaff
+    //from the grain when I look at valgrind
+    del_twm_tree(t);
+    del_symtab(ids);
     
     //Again, technically unnecessary
     free_msg_win_logs(err_log);

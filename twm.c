@@ -762,6 +762,8 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
         } else {
             parent->num_children = 0; //Not strictly necessary, but might help
         }
+        
+        tmp->type = TWM_UNINITIALIZED;
         destroy_twm_node(tmp);
         
         //Make sure we redraw this node and all its children, which have
@@ -1623,6 +1625,12 @@ void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn) {
 //Helper function to recurse through tree. Used by twm_tree_remove_item.
 //Returns 1 if item was found and deleted, 0 if not found, -1 on error (and
 //sets tree->error_str), or -2 if t is NULL
+//TODO: there are some problems with this function. It doesn't actually set
+//the focus (I forgot to do that) and also I deliberately asked remove_node
+//to not free node memory; this means remove_item needs to free things
+//sometimes. Anyway, it'll be worth single-stepping this sucker in gdb, or
+//maybe rewriting it in terms of my other functions which seem to be working
+//alright
 static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
     if (tree == NULL) {
         return -2; //This is all we can do
@@ -1698,6 +1706,15 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
 int twm_tree_remove_item(twm_tree *t, void *item) {
     if (t == NULL) {
         return -2; //This is all we can do
+    }
+    
+    //If we happen to be focused on the node we wish to delete, run our
+    //special function that also computes a sane node to focus on after this
+    //one is deleted.
+    //Now, with the benefit of hindisght I would have coded these functions
+    //differently. Oh well, this is good enough!
+    if (t->focus != NULL && t->focus->type == TWM_LEAF && t->focus->item == item) {
+        return twm_tree_remove_focused(t);
     }
     
     int rc = twm_tree_node_remove_item(t, t->head, item);

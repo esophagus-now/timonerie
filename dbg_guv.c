@@ -75,6 +75,8 @@ static void deinit_dbg_guv(dbg_guv *d) {
     free_linebuf_logs(&d->logs);
     deinit_linebuf(&d->logs);
     
+    if (d->name) free(d->name); //Valgrind found this one. 
+    
     #ifndef DISABLE_WEIRD_LOCK
     pthread_mutex_lock(&d->logs_mutex);
     pthread_mutex_unlock(&d->logs_mutex);
@@ -250,6 +252,7 @@ int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data
     
     //Note: we don't pthread_join. That thread (should) end itself at some
     //point
+    pthread_detach(tid); 
     return 0;
 }
 

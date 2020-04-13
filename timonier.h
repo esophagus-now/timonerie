@@ -17,6 +17,6 @@ typedef struct _file_tx_timonier {
     //etc, I'll finish this once I have the basic stuff up and running
 } file_tx_manager;
 
-//extern guv_operations const file_tx_guv_ops;
+extern guv_operations const file_tx_guv_ops;
 
 #endif

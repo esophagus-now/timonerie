@@ -56,7 +56,8 @@ typedef struct _draw_operations {
 typedef enum _twm_node_type {
     TWM_LEAF,
     TWM_HORZ,
-    TWM_VERT
+    TWM_VERT,
+    TWM_UNINITIALIZED
 } twm_node_type;
 
 //These should be opaque structs

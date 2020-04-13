@@ -83,6 +83,9 @@ typedef int parse_fn(dbg_cmd *dest, char const *str);
 
 int skip_whitespace(dbg_cmd *dest, char const *str);
 
+//This is more of a helper wrapper around sscanf
+int parse_strn(char *buf, int n, char const *str);
+
 int parse_dbg_guv_addr(dbg_cmd *dest, char const *str);
 
 int parse_param(dbg_cmd *dest, char const *str);
