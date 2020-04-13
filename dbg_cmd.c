@@ -344,15 +344,13 @@ static int parse_close_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    int num_read = 0;
+    //Try reading a string into dest->id
     int rc = parse_strn(dest->id, MAX_STR_PARAM_SIZE, str);
-    
     if (rc < 0) {
         dest->error_str = DBG_CMD_CLOSE_USAGE;
         return -1;
     }
-    
-    num_read += rc;
+    int num_read = rc;
     str += rc;
     
     rc = parse_eos(dest, str);
@@ -446,18 +444,14 @@ static int parse_name_cmd(dbg_cmd *dest, char const *str) {
         return -1;
     } 
     
-    int num_read;
-    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
-        dest->id,
-        &num_read
-    );
-    
-    if (rc != 1) {
-        dest->error_str = DBG_CMD_NAME_USAGE;
+    //Try reading a string into dest->id
+    int rc = parse_strn(dest->id, MAX_STR_PARAM_SIZE, str);
+    if (rc < 0) {
+        dest->error_str = DBG_CMD_CLOSE_USAGE;
         return -1;
     }
-    
-    str += num_read;
+    int num_read = rc;
+    str += rc;
     
     rc = parse_eos(dest, str);
     if (rc < 0) {
