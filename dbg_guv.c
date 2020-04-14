@@ -403,6 +403,7 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     //First, turn on inverted video mode
     *buf++ = '\e'; *buf++ = '['; *buf++ = '7'; *buf++ = 'm';
     
+    //Construct the little status icons
     char status[8];
     status[0] = '|';
     status[1] = d->inj_failed ? 'F' : '-';
@@ -417,35 +418,46 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     int incr = cursor_pos_cmd(buf, x, y);
     buf += incr;
     
+    //Print the title bar
     sprintf(buf, "%-*.*s%s%n", w - 7, w - 7, d->name, (d->values_unknown ? unknown : status), &incr);
     buf += incr;
     //Turn off inverted video
     *buf++ = '\e'; *buf++ = '['; *buf++ = '2'; *buf++ = '7'; *buf++ = 'm';
+    
+    //We consumed one line
+    h--;
+    y++;
     
     //Check how many lines the manager wants
     if (d->ops.lines_req == NULL || d->ops.draw_ops.draw_fn == NULL) {
         d->error_str = DBG_GUV_NULL_CB;
         return -1;
     }
-    int mgr_lines = d->ops.lines_req(d, w, h - 1);
+    int mgr_lines = d->ops.lines_req(d, w, h);
+    if (mgr_lines > h) {
+		mgr_lines = h;
+	}
     if (mgr_lines > 0) {
-        incr = d->ops.draw_ops.draw_fn(d, x, y + 1, w, mgr_lines, buf);
+        incr = d->ops.draw_ops.draw_fn(d, x, y, w, mgr_lines, buf);
         buf += incr;
         y += mgr_lines;
         h -= mgr_lines;
     }
     
-    //Now simply draw the linebuf in the remaining space
-    pthread_mutex_lock(&d->logs_mutex);
-    incr = draw_linebuf(&d->logs, d->log_pos, x, y + 1, w, h - 1, buf);
-    pthread_mutex_unlock(&d->logs_mutex);
-    
-    if (incr < 0) {
-        //Propagate error, not that it really matters...
-        d->error_str = d->logs.error_str;
-        return -1;
-    }
-    buf += incr;
+    //Now simply draw the linebuf in the remaining space, if there is 
+    //any
+    if (h > 0) {
+		pthread_mutex_lock(&d->logs_mutex);
+		incr = draw_linebuf(&d->logs, d->log_pos, x, y, w, h, buf);
+		pthread_mutex_unlock(&d->logs_mutex);
+		
+		if (incr < 0) {
+			//Propagate error, not that it really matters...
+			d->error_str = d->logs.error_str;
+			return -1;
+		}
+		buf += incr;
+	}
     
     d->need_redraw = 0;
     

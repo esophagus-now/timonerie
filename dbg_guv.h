@@ -12,6 +12,10 @@ struct _dbg_cmd; //This is a more serious circular reference... fix?
 
 struct _dbg_guv; //Fix circular reference
 
+//When a new manager is applied to a debug, its init callback is triggered.
+//This is optional. Return 0 on success, -1 on error.
+typedef int init_mgr_fn(struct _dbg_guv *owner);
+
 //If the user types in a command which is not one of the builtins, the 
 //entire command is instead sent to the focused dbg_guv window. The dbg_cmd
 //struct is used in case this timonier wants to
@@ -23,6 +27,7 @@ typedef int guv_got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg
 typedef int lines_req_fn(struct _dbg_guv *owner, int w, int h);
 
 typedef struct _guv_operations {
+	init_mgr_fn *init_mgr;
     guv_got_line_fn *got_line;
     lines_req_fn *lines_req;
     draw_operations draw_ops;
