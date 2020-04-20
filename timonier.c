@@ -90,22 +90,22 @@ typedef enum _fio_state_t {
     FIO_PAUSED,
     FIO_WAIT_ACK,
     FIO_DONE,
-    FIO_SEND_ERROR
-} fio_send_state_t;
+    FIO_ERROR
+} fio_file_state_t;
 
 #define MAX_FIO_NAME_SZ
 typedef struct _fio {
     //Input file
-    fio_send_state_t send_state;
+    fio_file_state_t send_state;
     char send_file[MAX_FIO_NAME_SZ+1];
     int send_fd;
     int send_bytes;
     char const *send_error_str;
     
     //Output file
+    fio_file_state_t log_state;
     char log_file[MAX_FIO_NAME_SZ+1];
     int log_fd;
-    int log_fd_valid;
     pthread_t log_thd;
     queue log_queue; 
     int log_numsaved;
@@ -147,6 +147,9 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
     dbg_guv *g = item;
     fio *f = g->manager;
     
+    //Keep track of original poitner so wan can calculate number of bytes printed.
+    char *buf_saved = buf;
+    
     //Build up the message that we'll print to the user
     char status[512];
     int pos = 0;
@@ -174,12 +177,57 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
 		sprintf(status + pos, "TX (Done): %s%n", f->send_file, &incr);
 		pos += incr;
 		break;
-	case FIO_SEND_ERROR:
+	case FIO_ERROR:
 		sprintf(status + pos, "TX (ERR: %s): %s%n", f->send_error_str, f->send_file, &incr);
 		pos += incr;
 		break;
 	}
-    return 0;
+    
+    //Add first line to display
+    incr = cursor_pos_cmd(buf, x, y);
+    buf += incr;
+    sprintf(buf, "%.*s%n", w, status, &incr);
+    buf += incr;
+    
+    //If we have a second line of space, also draw info for logfile
+    if (h > 1) {
+        pos = 0;
+        switch (f->log_state) {
+        case FIO_NOFILE:
+            sprintf(status + pos, "RX (Not in use)%n", &incr);
+            pos += incr;
+            break;
+        case FIO_IDLE: 
+            sprintf(status + pos, "RX (Idle): %s%n", f->log_file, &incr);
+            pos += incr;
+            break;
+        case FIO_SENDING:
+        case FIO_WAIT_ACK:
+            sprintf(status + pos, "RX (%d logged): %s%n", f->log_numsaved, f->log_file, &incr);
+            pos += incr;
+            break;
+        case FIO_PAUSED:
+            sprintf(status + pos, "RX (Paused, %d logged): %s%n", f->log_numsaved, f->log_file, &incr);
+            pos += incr;
+            break;
+        case FIO_DONE:
+            sprintf(status + pos, "RX (Done): %s%n", f->log_file, &incr);
+            pos += incr;
+            break;
+        case FIO_ERROR:
+            sprintf(status + pos, "RX (ERR: %s): %s%n", f->log_error_str, f->log_file, &incr);
+            pos += incr;
+            break;
+        }
+        
+        //Add second line to display
+        incr = cursor_pos_cmd(buf, x, y+1);
+        buf += incr;
+        sprintf(buf, "%.*s%n", w, status, &incr);
+        buf += incr;
+    }
+    
+    return buf - buf_saved;
 }
 
 //Returns how many bytes are needed (can be an upper bound) to draw item
