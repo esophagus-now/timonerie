@@ -31,6 +31,7 @@ struct _dbg_guv;
     X(CMD_OPEN),\
     X(CMD_CLOSE),\
     X(CMD_SEL),\
+    X(CMD_MGR),\
     X(CMD_NAME),\
     X(CMD_DBG_REG),\
     X(CMD_MSG),\
@@ -124,6 +125,7 @@ extern char const *const DBG_CMD_BAD_CMD        ; //    = "No such command";
 extern char const *const DBG_CMD_OPEN_USAGE        ; //    = "Usage: open fpga_name hostname port";
 extern char const *const DBG_CMD_CLOSE_USAGE        ; //    = "Usage: close fpga_name";
 extern char const *const DBG_CMD_SEL_USAGE        ; //    = "Usage: sel (fpga_name[guv_addr] | guv_name)";
+extern char const *const DBG_CMD_MGR_USAGE        ; //    = "Usage: mgr (int | fio)";
 extern char const *const DBG_CMD_NAME_USAGE        ; //    = "Usage: name guv_name";
 
 #endif

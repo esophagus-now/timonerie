@@ -26,11 +26,15 @@ typedef int guv_got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg
 //window, and smart timoniers may use fewer lines if the window is smaller
 typedef int lines_req_fn(struct _dbg_guv *owner, int w, int h);
 
+//Also allow a timonier the chance to clean itself up
+typedef void cleanup_mgr_fn(struct _dbg_guv *owner);
+
 typedef struct _guv_operations {
 	init_mgr_fn *init_mgr;
     guv_got_line_fn *got_line;
     lines_req_fn *lines_req;
     draw_operations draw_ops;
+    cleanup_mgr_fn *cleanup_mgr;
 } guv_operations;
 
 //To fix circular definition of dbg_guv and fpga_connection_info
@@ -73,7 +77,7 @@ typedef struct _dbg_guv {
     //This is done by passing a set of function pointers into the dbg_guv
     //struct that will get triggered at various times
     guv_operations ops;
-    void *manager;
+    void *mgr;
     
     //Address information for this dbg_guv
     struct _fpga_connection_info *parent;

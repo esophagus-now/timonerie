@@ -206,6 +206,43 @@ void got_rl_line(char *str) {
             }
             break;
         }
+        case CMD_MGR: {
+            if (g == NULL) {
+                cursor_pos(1, term_rows-1);
+                sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
+                write(1, line, len);
+                return;
+            } 
+            
+            //TODO (maybe): this just checks a hardcoded list of options.
+            //It would be difficult to add a new manager, but then again,
+            //it would take more time than necesary to make this "nice"...
+            
+            //Also: this is a super slow condition, but NO ONE CARES
+            if (!strncmp(cmd.id, "int", sizeof(cmd.id)) && g->ops.draw_ops.draw_fn != default_guv_ops.draw_ops.draw_fn) {
+                if (g->ops.cleanup_mgr != NULL) g->ops.cleanup_mgr(g);
+                g->ops = default_guv_ops;
+                g->mgr = NULL; //Doesn't really do anything, but helps with valgrind
+                g->need_redraw = 1;
+            } else if (!strncmp(cmd.id, "fio", sizeof(cmd.id)) && g->ops.draw_ops.draw_fn != fio_guv_ops.draw_ops.draw_fn) {
+                if (g->ops.cleanup_mgr != NULL) g->ops.cleanup_mgr(g);
+                g->ops = fio_guv_ops;
+                if (g->ops.init_mgr) {
+                    int rc = g->ops.init_mgr(g);
+                    if (rc < 0) {
+                        sprintf(line, "Could not set manager: %s. Resetting...", g->error_str);
+                        msg_win_dynamic_append(err_log, line);
+                        g->ops = default_guv_ops;
+                        g->mgr = NULL;
+                    }
+                }
+                g->need_redraw = 1;
+            } else {
+                msg_win_dynamic_append(err_log, "Manager unchanged");
+            }
+            
+            break;
+        }        
         case CMD_NAME: {
             if (g == NULL) {
                 cursor_pos(1, term_rows-1);

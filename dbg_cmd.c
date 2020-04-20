@@ -435,6 +435,36 @@ static int parse_sel_cmd(dbg_cmd *dest, char const *str) {
     return num_read;
 }
 
+static int parse_mgr_cmd(dbg_cmd *dest, char const *str) {
+    //Sanity check on inputs
+    if (dest == NULL) {
+        return -2; //This is all we can do
+    } else if (str == NULL) {
+        dest->error_str = DBG_CMD_NULL_PTR;
+        return -1;
+    } 
+    
+    //Try reading a string into dest->id
+    int rc = parse_strn(dest->id, MAX_STR_PARAM_SIZE, str);
+    if (rc < 0) {
+        dest->error_str = DBG_CMD_MGR_USAGE;
+        return -1;
+    }
+    int num_read = rc;
+    str += rc;
+    
+    rc = parse_eos(dest, str);
+    if (rc < 0) {
+        return -1; //dest->error_str already set
+    }
+    num_read += rc;
+    
+    dest->type = CMD_MGR;
+    dest->error_str = DBG_CMD_SUCCESS;
+    return num_read;
+}
+
+
 static int parse_name_cmd(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
@@ -447,7 +477,7 @@ static int parse_name_cmd(dbg_cmd *dest, char const *str) {
     //Try reading a string into dest->id
     int rc = parse_strn(dest->id, MAX_STR_PARAM_SIZE, str);
     if (rc < 0) {
-        dest->error_str = DBG_CMD_CLOSE_USAGE;
+        dest->error_str = DBG_CMD_NAME_USAGE;
         return -1;
     }
     int num_read = rc;
@@ -523,6 +553,7 @@ static cmd_info builtin_cmds[] = {
     {"open",	parse_open_cmd},	   //Open FPGA connection
     {"close",	parse_close_cmd},	   //Close FPGA connection
     {"sel",	    parse_sel_cmd},		   //Select active dbg_guv
+    {"mgr",	    parse_mgr_cmd},		   //Select manager for active dbg_guv
     {"set",	    parse_dbg_reg_cmd},	   //Issue a command to active dbg_guv
     {"name",	parse_name_cmd},	   //Rename active dbg_guv
     {"msg",	    parse_CMD_MSG},	       //Focus message window
@@ -601,4 +632,5 @@ char const *const DBG_CMD_BAD_CMD          = "No such command";
 char const *const DBG_CMD_OPEN_USAGE         = "Usage: open fpga_name hostname port";
 char const *const DBG_CMD_CLOSE_USAGE  = "Usage: close fpga_name";
 char const *const DBG_CMD_SEL_USAGE      = "Usage: sel (fpga_name[guv_addr] | guv_name)";
+char const *const DBG_CMD_MGR_USAGE      = "Usage: mgr (int | fio)";
 char const *const DBG_CMD_NAME_USAGE          = "Usage: name guv_name";

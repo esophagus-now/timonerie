@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "dbg_cmd.h"
 #include "twm.h"
@@ -80,7 +81,8 @@ guv_operations const default_guv_ops = {
         draw_fn_inter,
         draw_sz_inter,
         trigger_redraw_inter
-    }
+    },
+    NULL
 };
 
 typedef enum _fio_state_t {
@@ -128,10 +130,27 @@ static int filename_from_path(char const *path, char *dest) {
 }
 */
 
+static int init_fio(dbg_guv *owner) {
+    fio *mgr = calloc(1, sizeof(fio));
+    
+    if (!mgr) return -1; //TODO: error codes
+    
+    mgr->send_state = FIO_NOFILE;
+    mgr->log_state = FIO_NOFILE;
+    
+    init_queue(&mgr->log_queue, 1, 1);
+    
+    //TODO: spin up egress thread
+    
+    owner->mgr = mgr;
+    return 0;
+}
+
 //File I/O got_line function
 static int got_line_fio(dbg_guv *owner, char const *str, dbg_cmd *dest) {
-    dest->error_str = DBG_CMD_NOT_IMPL;
-    return -1;
+    //TEMPORARY: defer to regular commands just for the sake of incremental
+    //testing
+    return parse_dbg_reg_cmd(dest, str);
 }
 
 static int lines_req_fio(dbg_guv *owner, int w, int h) {
@@ -145,7 +164,7 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
     else if (h < 0 || w < 0) return -1;
     
     dbg_guv *g = item;
-    fio *f = g->manager;
+    fio *f = g->mgr;
     
     //Keep track of original poitner so wan can calculate number of bytes printed.
     char *buf_saved = buf;
@@ -186,7 +205,7 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
     //Add first line to display
     incr = cursor_pos_cmd(buf, x, y);
     buf += incr;
-    sprintf(buf, "%.*s%n", w, status, &incr);
+    sprintf(buf, "%-*.*s%n", w, w, status, &incr);
     buf += incr;
     
     //If we have a second line of space, also draw info for logfile
@@ -223,7 +242,7 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
         //Add second line to display
         incr = cursor_pos_cmd(buf, x, y+1);
         buf += incr;
-        sprintf(buf, "%.*s%n", w, status, &incr);
+        sprintf(buf, "%-*.*s%n", w, w, status, &incr);
         buf += incr;
     }
     
@@ -234,7 +253,7 @@ static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
 //given the size
 static int draw_sz_fio(void *item, int w, int h) {
     if (h > 0) {
-        return 10 + w; //Move the cursor and write w characters
+        return 2*(10 + w); //Move the cursor and write w characters on two lines
     } else {
         return 0; //In this case, only the dbg_guv title bar is drawn
     }
@@ -243,16 +262,28 @@ static int draw_sz_fio(void *item, int w, int h) {
 //Tells item that it should redraw, probably because it moved to another
 //area of the screen
 static void trigger_redraw_fio(void *item) {
-    
+    return; //TODO: am I even using this?
 }
 
-guv_operations const file_tx_guv_ops = {
-	NULL, //TODO: write FIO init function
+static void cleanup_fio(dbg_guv *owner) {
+    fio *mgr = owner->mgr;
+    if (mgr) {
+        deinit_queue(&mgr->log_queue);
+        //TODO: close egress thread
+        //TODO: close any open files
+        free(mgr);
+    }
+    owner->mgr = NULL;
+}
+
+guv_operations const fio_guv_ops = {
+	init_fio,
     got_line_fio,
     lines_req_fio,
     {
         draw_fn_fio,
         draw_sz_fio,
         trigger_redraw_fio
-    }
+    },
+    cleanup_fio
 };
