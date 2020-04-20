@@ -91,24 +91,25 @@ typedef enum _fio_state_t {
     FIO_WAIT_ACK,
     FIO_DONE,
     FIO_SEND_ERROR
-} fio_state_t;
+} fio_send_state_t;
 
 #define MAX_FIO_NAME_SZ
 typedef struct _fio {
     //Input file
-    fio_state_t send_state;
-    char infile_path[MAX_FIO_NAME_SZ+1];
-    int infile_fd;
-    int bytes_sent;
+    fio_send_state_t send_state;
+    char send_file[MAX_FIO_NAME_SZ+1];
+    int send_fd;
+    int send_bytes;
+    char const *send_error_str;
     
     //Output file
-    char logfile[MAX_FIO_NAME_SZ+1];
-    int logfile_fd;
-    int logfile_fd_valid;
-    pthread_t log_writer;
-    queue egress_queue; 
-    int logs_saved;
-    char const *out_error_str;
+    char log_file[MAX_FIO_NAME_SZ+1];
+    int log_fd;
+    int log_fd_valid;
+    pthread_t log_thd;
+    queue log_queue; 
+    int log_numsaved;
+    char const *log_error_str;
     //Hideous problem: what do we do if the received data is faster than
     //what we can save to disk? I do think this is possible if the OS is
     //doing a lot of file I/O in the background. Right now my "solution" is
@@ -139,36 +140,44 @@ static int lines_req_fio(dbg_guv *owner, int w, int h) {
 
 //Draws item. Returns number of bytes added into buf, or -1 on error.
 static int draw_fn_fio(void *item, int x, int y, int w, int h, char *buf) {
-    if (h == 0) return 0;
+    if (h == 0) return 0; //No space, don't draw anything
+    //Sanity check inputs
     else if (h < 0 || w < 0) return -1;
     
     dbg_guv *g = item;
-    
     fio *f = g->manager;
     
+    //Build up the message that we'll print to the user
     char status[512];
     int pos = 0;
     int incr;
     
-    if (f->send_state != FIO_NOFILE) {
-		sprintf(status + pos, "TX %s: %n", f->infile_path, &incr);
-		pos += incr;
-	}
 	switch (f->send_state) {
+    case FIO_NOFILE:
+		sprintf(status + pos, "TX (Not in use)%n", &incr);
+		pos += incr;
+        break;
 	case FIO_IDLE: 
-		sprintf(status + pos, "TX (idle): %s%n", f->infile_path, &incr);
+		sprintf(status + pos, "TX (Idle): %s%n", f->send_file, &incr);
 		pos += incr;
 		break;
 	case FIO_SENDING:
-		sprintf(status + pos, "TX: %s, %d bytes sent%n", f->infile_path, f->bytes_sent, &incr);
+    case FIO_WAIT_ACK:
+		sprintf(status + pos, "TX (%d B sent): %s%n", f->send_bytes, f->send_file, &incr);
 		pos += incr;
 		break;
 	case FIO_PAUSED:
-	case FIO_WAIT_ACK:
+		sprintf(status + pos, "TX (Paused, %d B sent): %s%n", f->send_bytes, f->send_file, &incr);
+		pos += incr;
+		break;
 	case FIO_DONE:
+		sprintf(status + pos, "TX (Done): %s%n", f->send_file, &incr);
+		pos += incr;
+		break;
 	case FIO_SEND_ERROR:
-	default:
-		break; //Get rid of error while I check syntax
+		sprintf(status + pos, "TX (ERR: %s): %s%n", f->send_error_str, f->send_file, &incr);
+		pos += incr;
+		break;
 	}
     return 0;
 }
