@@ -20,19 +20,39 @@ typedef int init_mgr_fn(struct _dbg_guv *owner);
 //entire command is instead sent to the focused dbg_guv window. The dbg_cmd
 //struct is used in case this timonier wants to
 //use one of the builtin functions (and for returning errors)
-typedef int guv_got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg_cmd *dest);
+typedef int got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg_cmd *dest);
 
 //A timonier may choose to occupy some of the lines inside of a dbg_guv 
 //window, and smart timoniers may use fewer lines if the window is smaller
 typedef int lines_req_fn(struct _dbg_guv *owner, int w, int h);
+
+//A manager can supply this callback if it wishes to be notified about 
+//command receipts
+typedef int cmd_receipt_fn(struct _dbg_guv *owner, unsigned const *receipt);
+
+//A manager can supply this callback if it wishes to be notified about 
+//logs from a dbg_guv
+typedef int log_fn(struct _dbg_guv *owner, unsigned const *log);
+
+//Sometimes a manager needs to be triggered periodically. The fast_update
+//function, if provided, will be triggered once per iteration of the event
+//loop. The slow callback is triggered every 50 ms (incidentally, this is
+//performed right before the display is checked for redrawing)
+typedef int fast_update_fn(struct _dbg_guv *owner);
+typedef int slow_update_fn(struct _dbg_guv *owner);
+
 
 //Also allow a timonier the chance to clean itself up
 typedef void cleanup_mgr_fn(struct _dbg_guv *owner);
 
 typedef struct _guv_operations {
 	init_mgr_fn *init_mgr;
-    guv_got_line_fn *got_line;
+    got_line_fn *got_line;
     lines_req_fn *lines_req;
+    cmd_receipt_fn *cmd_receipt;
+    log_fn *log;
+    fast_update_fn *fast_update;
+    slow_update_fn *slow_update;
     draw_operations draw_ops;
     cleanup_mgr_fn *cleanup_mgr;
 } guv_operations;
@@ -161,7 +181,7 @@ void del_fpga_connection(fpga_connection_info *f);
 //do NOT call this function if you are holding a mutex! By the way, does NOT
 //make an internal copy of the string; you must copy it yourself if this is
 //desired
-char *append_log(fpga_connection_info *f, int addr, char *log);
+char *append_log(dbg_guv *d, char *log);
 
 //TODO: runtime sizes for the stream
 int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);

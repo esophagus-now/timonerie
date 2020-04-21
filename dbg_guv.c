@@ -292,16 +292,13 @@ void del_fpga_connection(fpga_connection_info *f) {
 //do NOT call this function if you are holding a mutex! By the way, does NOT
 //make an internal copy of the string; you must copy it yourself if this is
 //desired
-char *append_log(fpga_connection_info *f, int addr, char *log) {
-    if (addr < 0 || addr > MAX_GUVS_PER_FPGA) {
-        return NULL;
-    }
-    pthread_mutex_lock(&f->guvs[addr].logs_mutex);
-    linebuf *l = &f->guvs[addr].logs;
+char *append_log(dbg_guv *d, char *log) {
+    pthread_mutex_lock(&d->logs_mutex);
+    linebuf *l = &d->logs;
     char *ret = linebuf_append(l, log);
-    pthread_mutex_unlock(&f->guvs[addr].logs_mutex);
+    pthread_mutex_unlock(&d->logs_mutex);
     
-    f->guvs[addr].need_redraw = 1;
+    d->need_redraw = 1;
     
     return ret;
 }
@@ -328,11 +325,13 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     
     //For each complete command in the buffer, dispatch to correct guv
     
-    unsigned *rd_pos = (unsigned *)f->buf;
+    #warning Be careful about endianness, and implement runtime sizes
+    unsigned *rd_pos = (unsigned *)f->buf; //TODO: manage endianness
     int msgs_left = (f->buf_pos / 8); //TODO: runtime size
     
     //Iterate through all the complete messages in the read buffer
     while (msgs_left --> 0) {
+        unsigned *beginning = rd_pos; //Hang onto this for guv ops calls
         unsigned addr = *rd_pos++;
         unsigned val = *rd_pos++;
         
@@ -344,9 +343,8 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
             continue;
         }
         
-        //TODO: pipe output handling
+        dbg_guv *d = f->guvs + dbg_guv_addr;
         if (is_receipt) {
-            dbg_guv *d = f->guvs + dbg_guv_addr;
             d->keep_pausing = val & 1;
             d->keep_logging = (val>>1) & 1;
             d->keep_dropping = (val>>2) & 1;
@@ -358,19 +356,31 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
             d->dout_not_rdy_cnt = (val>>8);
             d->values_unknown = 0;
             d->need_redraw = 1;
+            
+            if (d->ops.cmd_receipt != NULL) {
+                //TODO: check error code
+                #warning Error code is not checked
+                d->ops.cmd_receipt(d, beginning);
+            }
         } else {
             //Write a log to a dbg_guv
             char *log = malloc(32);
             sprintf(log, "0x%08x (%u)", val, val);
-            char *old = append_log(f, dbg_guv_addr, log);
+            char *old = append_log(d, log);
             if (old != NULL) free(NULL);
-            //TODO: pipe output handling
+            
+            if (d->ops.log != NULL) {
+                //TODO: check error code
+                #warning Error code is not checked
+                d->ops.log(d, beginning);
+            }
         }
     }
     
     //Now the really ugly thing: take whatever partial message
     //is left and shift it to the beginning of the buffer
     int i;
+    #warning Need to handle runtime parameter for size
     int leftover_bytes = f->buf_pos % 8; //TODO: runtime size
     f->buf_pos -= leftover_bytes;
     for (i = 0; i < leftover_bytes; i++) {

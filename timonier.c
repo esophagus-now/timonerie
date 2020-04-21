@@ -8,6 +8,65 @@
 #include "textio.h"
 #include "queue.h"
 
+//Global lists of manager update functions
+guv_list fast_update_head = {
+    .d = NULL,
+    .next = &fast_update_head,
+    .prev = &fast_update_head
+};
+
+guv_list slow_update_head = {
+    .d = NULL,
+    .next = &slow_update_head,
+    .prev = &slow_update_head
+};
+
+void register_fast_update(dbg_guv *d) {
+    #warning This malloc can fail
+    guv_list *to_insert = malloc(sizeof(guv_list));
+    to_insert->d = d;
+    to_insert->next = fast_update_head.next;
+    to_insert->prev = &fast_update_head;
+    fast_update_head.next->prev = to_insert;
+    fast_update_head.prev->next = to_insert;
+}
+
+void register_slow_update(dbg_guv *d) {
+    #warning This malloc can fail
+    guv_list *to_insert = malloc(sizeof(guv_list));
+    to_insert->d = d;
+    to_insert->next = slow_update_head.next;
+    to_insert->prev = &slow_update_head;
+    slow_update_head.next->prev = to_insert;
+    slow_update_head.prev->next = to_insert;
+}
+
+void deregister_fast_update(dbg_guv *d) {
+    guv_list *cur = fast_update_head.next;
+    while (cur != &fast_update_head) {
+        if (cur->d == d) {
+            cur->prev->next = cur->next;
+            cur->next->prev = cur->prev;
+            free(cur);
+            break;
+        }
+        cur = cur->next;
+    }
+}
+
+void deregister_slow_update(dbg_guv *d) {
+    guv_list *cur = slow_update_head.next;
+    while (cur != &slow_update_head) {
+        if (cur->d == d) {
+            cur->prev->next = cur->next;
+            cur->next->prev = cur->prev;
+            free(cur);
+            break;
+        }
+        cur = cur->next;
+    }
+}
+
 //I don't feel bad about this global variable being here, since I really 
 //only moved this stuff out of main.c to keep the code files more organized.
 extern msg_win *err_log;
@@ -74,15 +133,17 @@ static void trigger_redraw_inter(void *item) {
 }
 
 guv_operations const default_guv_ops = {
-	NULL,
-    got_line_inter,
-    lines_req_inter,
-    {
-        draw_fn_inter,
-        draw_sz_inter,
-        trigger_redraw_inter
+	.init_mgr = NULL,
+    .got_line = got_line_inter,
+    .lines_req = lines_req_inter,
+    .cmd_receipt = NULL,
+    .log = NULL,
+    .draw_ops = {
+        .draw_fn = draw_fn_inter,
+        .draw_sz = draw_sz_inter,
+        .trigger_redraw = trigger_redraw_inter
     },
-    NULL
+    .cleanup_mgr = NULL
 };
 
 typedef enum _fio_state_t {
@@ -277,13 +338,15 @@ static void cleanup_fio(dbg_guv *owner) {
 }
 
 guv_operations const fio_guv_ops = {
-	init_fio,
-    got_line_fio,
-    lines_req_fio,
-    {
-        draw_fn_fio,
-        draw_sz_fio,
-        trigger_redraw_fio
+	.init_mgr = init_fio,
+    .got_line = got_line_fio,
+    .lines_req = lines_req_fio,
+    .cmd_receipt = NULL,
+    .log = NULL,
+    .draw_ops = {
+        .draw_fn = draw_fn_fio,
+        .draw_sz = draw_sz_fio,
+        .trigger_redraw = trigger_redraw_fio
     },
-    cleanup_fio
+    .cleanup_mgr = cleanup_fio
 };
