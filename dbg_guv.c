@@ -152,6 +152,8 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 	
 	f->out_buf_len += len;
 	f->error_str = DBG_GUV_SUCC;
+	#warning Error code not checked
+	event_add(f->wr_ev, NULL); //Now that there is data to send, send it!
 	return 0;
 }
 
@@ -276,8 +278,8 @@ int write_fpga_connection(fpga_connection_info *f, int fd) {
 	}
 	
 	//Update the position/length in the circular buffer
-	f->out_buf_pos -= rc;
-	if (f->out_buf_pos == 0) {
+	f->out_buf_len -= rc;
+	if (f->out_buf_len == 0) {
 		//Special case: since I don't a priori constrain the size of
 		//data appended into the outpu buffer, take this chance when
 		//the buffer is empty to move the position to the start. This

@@ -30,11 +30,12 @@ twm_tree *t = NULL;
 struct event_base *ev_base = NULL;
 
 typedef enum {
+	SYM_UNINITIALIZED,
     SYM_FCI,
     SYM_DG
 } sym_type;
 
-typedef struct {
+typedef struct _sem_val{
     sym_type type;
     void *v;
 } sem_val;
@@ -375,7 +376,12 @@ void got_rl_line(char *str) {
                 break;
             }
             
-            int rc = symtab_append(ids, cmd.id, NULL, 0);
+            sem_val uninit = {
+				.type = SYM_UNINITIALIZED,
+				.v = NULL
+			};
+            
+            int rc = symtab_append(ids, cmd.id, &uninit, sizeof(uninit));
             if (rc < 0) {
                 char line[80];
                 sprintf("Could not append symbol to table: %s", ids->error_str);
@@ -388,7 +394,7 @@ void got_rl_line(char *str) {
             
             if (sfd < 0) {
                 char line[80];
-                sprintf("Could not open socket: %s", error_str);
+                sprintf(line, "Could not open socket: %s", error_str);
                 msg_win_dynamic_append(err_log, line);
                 break;
 			}
@@ -440,9 +446,12 @@ void got_rl_line(char *str) {
                 }
                 fpga_connection_info *f = sym_dat(e, sem_val*)->v;
                 selected = f->guvs + cmd.dbg_guv_addr;
-            } else {
+            } else if (sym_dat(e, sem_val*)->type == SYM_DG) {
                 selected = sym_dat(e, sem_val*)->v;
-            }
+            } else {
+				msg_win_dynamic_append(err_log, "This symbol is not an FPGA or dbg_guv");
+				break;
+			}
             
             int rc = twm_tree_focus_item(t, selected);
             if (t->error_str == TWM_NOT_FOUND) {
@@ -753,7 +762,7 @@ int get_nb_sock(char const *node, char const *serv, char const* *error_str) {
     
     //Connect the socket
     rc = connect(sfd, res->ai_addr, res->ai_addrlen);
-    if (rc < 0) {
+    if (rc < 0 && errno != EINPROGRESS) {
         if (error_str) *error_str = strerror(errno);
         close(sfd);
         freeaddrinfo(res);
