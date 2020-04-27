@@ -8,7 +8,6 @@
 #include <readline/history.h>
 #include <signal.h>
 #include <event2/event.h>
-#include <pthread.h>
 #include <unistd.h>
 #include "timonier.h"
 #include "textio.h"
@@ -25,7 +24,6 @@ msg_win *err_log = NULL;
 #include "TEMPORARY.txt"
 
 twm_tree *t = NULL; 
-pthread_mutex_t t_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 //You know what? It's time to embrace the globals! I need to simplify my
 //life if I'm ever gonna finish this
@@ -54,42 +52,295 @@ fci_list fci_head = {
     .next = &fci_head
 };
 
+//Prototypes for helper functions
+int get_nb_sock(char const *node, char const *serv, char **error_str);
+void cleanup_fpga_connection(fpga_connection_info *f);
 void fpga_conn_cb(new_fpga_cb_info info); //Forward-declare
 
-void cleanup_fpga_connection(fpga_connection_info *f) {
-    event_del(f->ev);
-    
-    int i;
-    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
-        //Whatever, don't bother error-checking
-        dbg_guv *g = f->guvs + i;
-        //Release ID
-        symtab_entry *e = symtab_lookup(ids, g->name);
-        if (e) symtab_array_remove(ids, e);
-        //Close windows
-        twm_tree_remove_item(t, g);
+void twm_resize_cb(void) {                        
+    int rc = twm_tree_redraw(t);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not issue redraw: %s", t->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
     }
     
-    //Free this FPGA's ID
-    if (f->name) {
-        symtab_entry *e = symtab_lookup(ids, f->name);
-        if (e) symtab_array_remove(ids, e);
+    readline_redisplay();
+}
+
+void draw_cb(evutil_socket_t fd, short what, void *arg) {    
+    int rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not draw tree: %s", t->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+    } else if (rc > 0) {
+        place_readline_cursor();
+    }
+}
+
+void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
+    fpga_connection_info *f = arg;
+    
+    int rc = read_fpga_connection(f, f->sfd, 4);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+        cleanup_fpga_connection(f);
+    }
+}
+
+void fpga_write_cb(evutil_socket_t fd, short what, void *arg) {
+    fpga_connection_info *f = arg;
+    
+    int rc = write_fpga_connection(f, f->sfd);
+    if (rc < 0) {
+        char errmsg[80];
+        sprintf(errmsg, "Could not write to FPGA: %s. Closing...", f->error_str);
+        msg_win_dynamic_append(err_log, errmsg);
+        cleanup_fpga_connection(f);
+    }
+}
+
+void fpga_conn_cb(evutil_socket_t fd, short what, void *arg) {
+    char *id = arg;
+    symtab_entry *e = symtab_lookup(ids, id);
+    if (e == NULL) {
+		char line[80];
+		sprintf(line, "Symbol table error. Maybe this will help: %s", ids->error_str);
+		msg_win_dynamic_append(err_log, line);
+		close(fd);
+		return;
+	}
+    
+    //Check if connection succeeded
+    int rc, result;
+    rc = getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, sizeof(int));
+    //Pedantic, but read Henry Spencer's 10 Commandments of C vis-à-vis
+    //checking error return codes
+    if (rc < 0) {
+        char line[80];
+        sprintf(line, "Could not query connection status: %s", strerror(errno));
+        msg_win_dynamic_append(err_log, line);
+        symtab_array_remove(ids, e);
+        free(id);
+        //TODO: can/should we close fd here?
+        return;
+	}
+    //Now we can actually check the connection status
+    if (result < 0) {
+        char line[80];
+        sprintf(line, "Could not connect to FPGA: %s", strerror(errno));
+        msg_win_dynamic_append(err_log, line);
+        symtab_array_remove(ids, e);
+        close(fd);
+        free(id);
+        return;
+	}
+    
+    fpga_connection_info *f = new_fpga_connection();
+    if (f == NULL) {
+        msg_win_dynamic_append(err_log, "Could not open FPGA: out of memory");
+        symtab_array_remove(ids, e);
+        close(fd);
+        free(id);
+	}
+	
+	char line[120];
+    sprintf(line, "Connection [%s] opened", e->sym);
+    msg_win_dynamic_append(err_log, line);
+    
+    fci_list *n = malloc(sizeof(fci_list));
+    n->f = f;
+    n->prev = &fci_head;
+    n->next = fci_head.next;
+    fci_head.next->prev = n;
+    fci_head.next = n;
+    
+    //Hook up new events to read and write data from the connection
+    struct event *read_ev = event_new(ev_base, fd, EV_READ | EV_PERSIST, fpga_read_cb, f);
+    event_add(read_ev, NULL);
+    f->rd_ev = read_ev;
+    
+    struct event *write_ev = event_new(ev_base, fd, EV_WRITE, fpga_write_cb, f);
+    //Don't add the event yet; nothing to write
+    f->wr_ev = write_ev;
+    
+    //Set symbol and save name
+    sym_dat(e, sem_val*)->type = SYM_FCI;
+    sym_dat(e, sem_val*)->v = f;
+    f->name = id; //SUBTLE: this string has already been copied. We are 
+    //essentially handing off ownership of the memory here, but for sure
+    //I should check valgrind
+}
+
+void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
+    //Although it's a global, this function takes the event_base as the arg
+    //It just means that I won't have to update this function if I find a
+    //nice way to get rid of the global variables
+    struct event_base *base = arg;
+    
+    //Sometimes timonerie uses a special key. However, if it doesn't use it,
+    //we should pass it to readline
+    static char ansi_code[16];
+    static int ansi_code_pos = 0;
+    
+    //Scratchpad for building error messages
+    char errmsg[80];
+    
+    //Slow to read one character at a time, but who cares? The user isn't
+    //typing super fast, and timonerie is not meant to be used by piping
+    //into its stdin (in fact, it will quit if not used with a TTY).
+    char c;
+    read(STDIN_FILENO, &c, 1);
+    
+    //If user pressed CTRL-D we can quit
+    if (c == '\x04') {
+        event_base_loopbreak(base);
     }
     
-    //Remove from global list of opened connections
-    fci_list *cur = fci_head.next;
-    while (cur != &fci_head) {
-        if (cur->f == f) {
-            cur->prev->next = cur->next;
-            cur->next->prev = cur->prev;
-            free(cur);
-            break;
-        } else {
-            cur = cur->next;
+    ansi_code[ansi_code_pos++] = c;
+    
+    static textio_input in; //VERY subtle! I forgot that textio_getch_cr
+    //saves some state inside the textio_input struct. TODO: maybe fix
+    //textio_getch_cr so that it maintains a local textio_input for its
+    //state then only copies it out on a match
+    int rc = textio_getch_cr(c, &in);
+    if (rc == 0) {
+        //Assume we've used the ansi code we've been saving, until
+        //it turns out we didn't
+        int used_ansi_code = 1;
+        
+        switch(in.type) {
+        case TEXTIO_GETCH_PLAIN: {
+            if (in.c == 12) {
+                twm_resize_cb(); //This is the callback that textio calls on SIGWINCH events
+            }
         }
+        case TEXTIO_GETCH_FN_KEY: {
+            int dir;
+            int got_arrow_key = 1;
+            switch(in.key) {
+            case TEXTIO_KEY_UP:
+                dir = TWM_UP;
+                break;
+            case TEXTIO_KEY_DOWN:
+                dir = TWM_DOWN;
+                break;
+            case TEXTIO_KEY_LEFT:
+                dir = TWM_LEFT;
+                break;
+            case TEXTIO_KEY_RIGHT:
+                dir = TWM_RIGHT;
+                break;
+            default:
+                got_arrow_key = 0;
+                break;
+            }
+            
+            if (got_arrow_key) {
+                //Let the compiler optimize these predicates
+                if (in.meta && in.shift && !in.ctrl) {
+                    int rc = twm_tree_move_focused_node(t, dir);
+                    if (rc < 0) {
+                        sprintf(errmsg, "Could not move window: %s", t->error_str);
+                        msg_win_dynamic_append(err_log, errmsg);
+                    }
+                } else if (in.meta && !in.shift && !in.ctrl) {
+                    int rc = twm_tree_move_focus(t, dir);
+                    if (rc < 0) {
+                        sprintf(errmsg, "Could not move focus: %s", t->error_str);
+                        msg_win_dynamic_append(err_log, errmsg);
+                    }
+                } else if (!in.meta && in.ctrl) {
+                    dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
+                    if (g) {
+                        if (dir == TWM_UP) dbg_guv_scroll(g, in.shift ? 10: 1);
+                        if (dir == TWM_DOWN) dbg_guv_scroll(g, in.shift ? -10: -1);
+                    }
+                    msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
+                    if (m) {
+                        if (dir == TWM_UP) msg_win_scroll(m, in.shift ? 10: 1);
+                        if (dir == TWM_DOWN) msg_win_scroll(m, in.shift ? -10: -1);
+                    }
+                    
+                    if (g == NULL && m == NULL) {
+                        msg_win_dynamic_append(err_log, "Not a scrollable window");
+                    }
+                } else {
+                    used_ansi_code = 0;
+                }
+            } else {
+                used_ansi_code = 0;
+            }
+            
+            break;
+        }
+        case TEXTIO_GETCH_ESCSEQ:
+            switch(in.code) {
+            case 'q':
+                rc = twm_tree_remove_focused(t);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not delete window: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'v':
+                rc = twm_set_stack_dir_focused(t, TWM_VERT);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not set to vertical: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'h':
+                rc = twm_set_stack_dir_focused(t, TWM_HORZ);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not set to horizontal: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'w':
+                rc = twm_toggle_stack_dir_focused(t);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not toggle stack direction: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'a':
+                rc = twm_tree_move_focus(t, TWM_PARENT);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not move focus up: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            case 'z':
+                rc = twm_tree_move_focus(t, TWM_CHILD);
+                if (rc < 0) {
+                    sprintf(errmsg, "Could not move focus down: %s", t->error_str);
+                    msg_win_dynamic_append(err_log, errmsg);
+                }
+                break;
+            default:
+                used_ansi_code = 0;
+                break;
+            }
+            break;
+        default:
+            used_ansi_code = 0;
+            break;
+        }
+        
+        if (!used_ansi_code) {
+            ansi_code[ansi_code_pos] = 0;
+            readline_sendstr(ansi_code);
+        }
+        
+        ansi_code_pos = 0;
+    } else if (rc < 0) {
+        sprintf(errmsg, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
+        msg_win_dynamic_append(err_log, errmsg);
     }
-    
-    del_fpga_connection(f);
 }
 
 void got_rl_line(char *str) {    
@@ -133,19 +384,22 @@ void got_rl_line(char *str) {
                 break;
             }
             
-            //Slow, but who cares?
-            e = symtab_lookup(ids, cmd.id);
-            if (e == NULL) {
+            char *error_str;
+            int sfd = get_nb_sock(cmd.node, cmd.serv, &error_str);
+            
+            if (sfd < 0) {
                 char line[80];
-                sprintf("Fatal symol table error. Maybe this will help: %s", ids->error_str);
+                sprintf("Could not open socket: %s", error_str);
                 msg_win_dynamic_append(err_log, line);
                 break;
-            }
+			}
             
-            rc = new_fpga_connection(fpga_conn_cb, cmd.node, cmd.serv, e);
-            if (rc < 0) {
-                msg_win_dynamic_append(err_log, "Could not open FPGA connection");
-            }
+            //Hook up event listener that waits for the connection to complete
+            //SUBTLE: cmd.id is copied here. First of all, cmd.id is a static
+            //buffer. Also, eventually, this string will be saved inside an
+            //fpga_connection_info struct (I can't remember why this is needed)
+            //and when that struct is destroyed the copied memory will be freed
+            event_base_once(ev_base, sfd, EV_WRITE, fpga_conn_cb, strdup(cmd.id), NULL);
             break;
         }
         case CMD_CLOSE: {
@@ -377,8 +631,16 @@ void got_rl_line(char *str) {
             
             //Actually send the command
             unsigned cmd_addr = (dbg_guv_addr << 4) | cmd.reg;
-            queue_write(&g->parent->egress, (char*) &cmd_addr, sizeof(cmd_addr));
-            if (cmd.has_param) queue_write(&g->parent->egress, (char*) &cmd.param, sizeof(cmd.param));
+            fpga_connection_info *f = g->parent;
+			
+            int rc = fpga_enqueue_tx(f, (char*) &cmd_addr, sizeof(cmd_addr));
+            if (rc == 0 && cmd.has_param) {
+				rc = fpga_enqueue_tx(f, (char*) &cmd.param, sizeof(cmd.param));
+			}
+			if (rc < 0) {
+				sprintf(line, "Could not enqueue command: %s", f->error_str);
+				msg_win_dynamic_append(err_log, line);
+			}
             break;
         }
         default: {
@@ -391,248 +653,6 @@ void got_rl_line(char *str) {
     }
     
     free(str);
-}
-
-void twm_resize_cb(void) {                        
-    int rc = twm_tree_redraw(t);
-    if (rc < 0) {
-        char errmsg[80];
-        sprintf(errmsg, "Could not issue redraw: %s", t->error_str);
-        msg_win_dynamic_append(err_log, errmsg);
-    }
-    
-    readline_redisplay();
-}
-
-void draw_cb(evutil_socket_t fd, short what, void *arg) {
-    pthread_mutex_lock(&t_mutex);
-    
-    int rc = twm_draw_tree(STDOUT_FILENO, t, 1, 1, term_cols, term_rows - 2);
-    if (rc < 0) {
-        char errmsg[80];
-        sprintf(errmsg, "Could not draw tree: %s", t->error_str);
-        msg_win_dynamic_append(err_log, errmsg);
-    } else if (rc > 0) {
-        place_readline_cursor();
-    }
-    
-    pthread_mutex_unlock(&t_mutex);
-}
-
-void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
-    fpga_connection_info *f = arg;
-    
-    int rc = read_fpga_connection(f, f->sfd, 4);
-    if (rc < 0) {
-        char errmsg[80];
-        sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
-        msg_win_dynamic_append(err_log, errmsg);
-        cleanup_fpga_connection(f);
-    }
-}
-
-void handle_stdin_cb(evutil_socket_t fd, short what, void *arg) {
-    //Although it's a global, this function takes the event_base as the arg
-    //It just means that I won't have to update this function if I find a
-    //nice way to get rid of the global variables
-    struct event_base *base = arg;
-    
-    //Sometimes timonerie uses a special key. However, if it doesn't use it,
-    //we should pass it to readline
-    static char ansi_code[16];
-    static int ansi_code_pos = 0;
-    
-    //Scratchpad for building error messages
-    char errmsg[80];
-    
-    //Slow to read one character at a time, but who cares? The user isn't
-    //typing super fast, and timonerie is not meant to be used by piping
-    //into its stdin (in fact, it will quit if not used with a TTY).
-    char c;
-    read(STDIN_FILENO, &c, 1);
-    
-    //If user pressed CTRL-D we can quit
-    if (c == '\x04') {
-        event_base_loopbreak(base);
-    }
-    
-    ansi_code[ansi_code_pos++] = c;
-    
-    static textio_input in; //VERY subtle! I forgot that textio_getch_cr
-    //saves some state inside the textio_input struct. TODO: maybe fix
-    //textio_getch_cr so that it maintains a local textio_input for its
-    //state then only copies it out on a match
-    int rc = textio_getch_cr(c, &in);
-    if (rc == 0) {
-        //Assume we've used the ansi code we've been saving, until
-        //it turns out we didn't
-        int used_ansi_code = 1;
-        
-        switch(in.type) {
-        case TEXTIO_GETCH_PLAIN: {
-            if (in.c == 12) {
-                twm_resize_cb(); //This is the callback that textio calls on SIGWINCH events
-            }
-        }
-        case TEXTIO_GETCH_FN_KEY: {
-            int dir;
-            int got_arrow_key = 1;
-            switch(in.key) {
-            case TEXTIO_KEY_UP:
-                dir = TWM_UP;
-                break;
-            case TEXTIO_KEY_DOWN:
-                dir = TWM_DOWN;
-                break;
-            case TEXTIO_KEY_LEFT:
-                dir = TWM_LEFT;
-                break;
-            case TEXTIO_KEY_RIGHT:
-                dir = TWM_RIGHT;
-                break;
-            default:
-                got_arrow_key = 0;
-                break;
-            }
-            
-            if (got_arrow_key) {
-                //Let the compiler optimize these predicates
-                if (in.meta && in.shift && !in.ctrl) {
-                    int rc = twm_tree_move_focused_node(t, dir);
-                    if (rc < 0) {
-                        sprintf(errmsg, "Could not move window: %s", t->error_str);
-                        msg_win_dynamic_append(err_log, errmsg);
-                    }
-                } else if (in.meta && !in.shift && !in.ctrl) {
-                    int rc = twm_tree_move_focus(t, dir);
-                    if (rc < 0) {
-                        sprintf(errmsg, "Could not move focus: %s", t->error_str);
-                        msg_win_dynamic_append(err_log, errmsg);
-                    }
-                } else if (!in.meta && in.ctrl) {
-                    dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
-                    if (g) {
-                        if (dir == TWM_UP) dbg_guv_scroll(g, in.shift ? 10: 1);
-                        if (dir == TWM_DOWN) dbg_guv_scroll(g, in.shift ? -10: -1);
-                    }
-                    msg_win *m = twm_tree_get_focused_as(t, draw_fn_msg_win);
-                    if (m) {
-                        if (dir == TWM_UP) msg_win_scroll(m, in.shift ? 10: 1);
-                        if (dir == TWM_DOWN) msg_win_scroll(m, in.shift ? -10: -1);
-                    }
-                    
-                    if (g == NULL && m == NULL) {
-                        msg_win_dynamic_append(err_log, "Not a scrollable window");
-                    }
-                } else {
-                    used_ansi_code = 0;
-                }
-            } else {
-                used_ansi_code = 0;
-            }
-            
-            break;
-        }
-        case TEXTIO_GETCH_ESCSEQ:
-            switch(in.code) {
-            case 'q':
-                rc = twm_tree_remove_focused(t);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not delete window: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            case 'v':
-                rc = twm_set_stack_dir_focused(t, TWM_VERT);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not set to vertical: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            case 'h':
-                rc = twm_set_stack_dir_focused(t, TWM_HORZ);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not set to horizontal: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            case 'w':
-                rc = twm_toggle_stack_dir_focused(t);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not toggle stack direction: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            case 'a':
-                rc = twm_tree_move_focus(t, TWM_PARENT);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not move focus up: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            case 'z':
-                rc = twm_tree_move_focus(t, TWM_CHILD);
-                if (rc < 0) {
-                    sprintf(errmsg, "Could not move focus down: %s", t->error_str);
-                    msg_win_dynamic_append(err_log, errmsg);
-                }
-                break;
-            default:
-                used_ansi_code = 0;
-                break;
-            }
-            break;
-        default:
-            used_ansi_code = 0;
-            break;
-        }
-        
-        if (!used_ansi_code) {
-            ansi_code[ansi_code_pos] = 0;
-            readline_sendstr(ansi_code);
-        }
-        
-        ansi_code_pos = 0;
-    } else if (rc < 0) {
-        sprintf(errmsg, "Bad input, why = %s, smoking_gun = 0x%02x", in.error_str, in.smoking_gun & 0xFF);
-        msg_win_dynamic_append(err_log, errmsg);
-    }
-}
-
-//TODO: function that runs on every event loop and tries calling timonier
-//update functions
-
-void fpga_conn_cb(new_fpga_cb_info info) {
-    fpga_connection_info *f = info.f;
-    symtab_entry *e = (symtab_entry*) info.user_data;
-    if (f == NULL) {
-        char line[80];
-        sprintf(line, "Could not connect to FPGA: %s", info.error_str);
-        msg_win_dynamic_append(err_log, line);
-        symtab_array_remove(ids, e);
-        return;
-    } else {
-        char line[120];
-        sprintf(line, "Connection [%s] opened", e->sym);
-        msg_win_dynamic_append(err_log, line);
-    }
-    
-    fci_list *n = malloc(sizeof(fci_list));
-    n->f = f;
-    n->prev = &fci_head;
-    n->next = fci_head.next;
-    fci_head.next->prev = n;
-    fci_head.next = n;
-    
-    //Hook up a new event to read data from the connection
-    struct event *read_ev = event_new(ev_base, f->sfd, EV_READ | EV_PERSIST, fpga_read_cb, f);
-    event_add(read_ev, NULL);
-    f->ev = read_ev;
-    
-    //Set symbol and save name
-    sym_dat(e, sem_val*)->type = SYM_FCI;
-    sym_dat(e, sem_val*)->v = f;
-    f->name = strdup(e->sym);
 }
 
 int main(int argc, char **argv) {    
@@ -655,9 +675,7 @@ int main(int argc, char **argv) {
     //Set up the message window, and show it by default in the TWM    
     err_log = new_msg_win("Message Window");
     
-    pthread_mutex_lock(&t_mutex);
     twm_tree_add_window(t, err_log, msg_win_draw_ops);
-    pthread_mutex_unlock(&t_mutex);
     
     //Set up libevent. I ended up just making the base a global; it was a 
     //lot easier that way
@@ -703,4 +721,84 @@ int main(int argc, char **argv) {
     //Return the terminal to its original state    
     clean_screen();
     return 0;
+}
+
+//Given node and serv, tries to resolve the address and to connect a
+//non-blocking socket. Returns the file decsriptor on success, or -1 on
+//error. In this case, if the given error_str pointer is non-NULL, stores
+//a printable error string to explain the cause of failure
+int get_nb_sock(char const *node, char const *serv, char **error_str) {
+    int sfd = -1;
+    
+    //Try to resolve address
+    struct addrinfo *res = NULL;
+    struct addrinfo hint = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM, //TODO: support UDP?
+        .ai_protocol = 0 //Not sure if this protocol field needs to be set
+    };
+    
+    int rc = getaddrinfo(node, serv, &hint, &res);
+    if (rc < 0) {
+        if (error_str) *error_str = gai_strerror(rc);
+        return -1;
+    }
+    
+    //Open the socket file descriptor in non-blocking mode
+    sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (sfd < 0) {
+        if (error_str) *error_str = strerror(errno);
+        freeaddrinfo(res);
+        return -1
+    }
+    
+    //Connect the socket
+    rc = connect(sfd, res->ai_addr, res->ai_addrlen);
+    if (rc < 0) {
+        if (error_str) *error_str = strerror(errno);
+        close(sfd);
+        freeaddrinfo(res);
+        return -1;
+    }
+    
+    freeaddrinfo(res);
+    
+    return sfd;
+}
+
+void cleanup_fpga_connection(fpga_connection_info *f) {
+    event_del(f->rd_ev);
+    event_del(f->wr_ev);
+    
+    int i;
+    for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {
+        //Whatever, don't bother error-checking
+        dbg_guv *g = f->guvs + i;
+        //Release ID
+        symtab_entry *e = symtab_lookup(ids, g->name);
+        if (e) symtab_array_remove(ids, e);
+        //Close windows
+        twm_tree_remove_item(t, g);
+    }
+    
+    //Free this FPGA's ID
+    if (f->name) {
+        symtab_entry *e = symtab_lookup(ids, f->name);
+        if (e) symtab_array_remove(ids, e);
+    }
+    
+    //Remove from global list of opened connections
+    fci_list *cur = fci_head.next;
+    while (cur != &fci_head) {
+        if (cur->f == f) {
+            cur->prev->next = cur->next;
+            cur->next->prev = cur->prev;
+            free(cur);
+            break;
+        } else {
+            cur = cur->next;
+        }
+    }
+    
+    del_fpga_connection(f);
 }

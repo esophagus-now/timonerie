@@ -1,4 +1,3 @@
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +9,6 @@
 #include <sched.h>
 #include "dbg_guv.h"
 #include "textio.h"
-#include "queue.h"
 #include "timonier.h"
 
 char const *const DBG_GUV_SUCC = "success";
@@ -18,45 +16,20 @@ char const *const DBG_GUV_NULL_ARG = "received NULL argument";
 char const *const DBG_GUV_NULL_CB = "received NULL callback";
 char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
 char const *const DBG_GUV_CNX_CLOSED = "external host closed connection";
+char const *const DBG_GUV_IMPOSSIBLE = "code reached a location that Marco thought was impossible";
+char const *const DBG_GUV BAD_ADDRESS = "could not resolve address";
+char const *const DBG_GUV_OOM = "out of memory";
+char const *const DBG_GUV_NOT_ENOUGH_SPACE = "not enough room in buffer";
+
 
 //////////////////////////////
 //Static functions/variables//
 //////////////////////////////
 
-//Thread that manages outgoing network data. Empties fpga->egress queue
-//arg is a pointer to an fpga_connection_info struct
-static void* fpga_egress_thread(void *arg) {
-    fpga_connection_info *info = (fpga_connection_info *)arg;
-    #ifdef DEBUG_ON
-    fprintf(stderr, "Entered net_tx (%p)\n", info);
-    #endif
-    
-    if (info == NULL) {
-        #ifdef DEBUG_ON
-        fprintf(stderr, "NULL argument to fpga_egress_thread!\n");
-        #endif
-        pthread_exit(NULL);
-    }
-    
-    queue *q = &info->egress;
-    
-    char cmd[4];
-    while (dequeue_n(q, cmd, 4) == 0) {
-        int len = write(info->sfd, cmd, 4);
-        if (len <= 0) break;
-    }
-    
-    #ifdef DEBUG_ON
-    fprintf(stderr, "Exited net_tx (%p)\n", info);
-    #endif
-    pthread_exit(NULL);
-}
-
 static void init_dbg_guv(dbg_guv *d, fpga_connection_info *f, int addr) {
     memset(d, 0, sizeof(dbg_guv));
     
     init_linebuf(&d->logs, DBG_GUV_SCROLLBACK);
-    pthread_mutex_init(&d->logs_mutex, NULL);
     
     char line[80];
     sprintf(line, "%p[%d]", f, addr);
@@ -76,17 +49,16 @@ static void deinit_dbg_guv(dbg_guv *d) {
     deinit_linebuf(&d->logs);
     
     if (d->name) free(d->name); //Valgrind found this one. 
-    
-    #ifndef DISABLE_WEIRD_LOCK
-    pthread_mutex_lock(&d->logs_mutex);
-    pthread_mutex_unlock(&d->logs_mutex);
-    #endif
-    pthread_mutex_destroy(&d->logs_mutex);
 }
 
-//A helper function to properly allocate, construct, and initialize an 
-//fpga_connection_info struct.
-static fpga_connection_info *construct_fpga_connection() {
+///////////////////////////////////////////
+//Implementations of prototypes in header//
+///////////////////////////////////////////
+
+//Returns a newly allocated and constructed fpga_connection_info struct,
+//or NULL on error
+//TODO: make dbg_guv widths parameters to this function?
+fpga_connection_info* new_fpga_connection() {
     fpga_connection_info *ret = calloc(1, sizeof(fpga_connection_info));
     if (!ret) return NULL;
     
@@ -95,184 +67,16 @@ static fpga_connection_info *construct_fpga_connection() {
         init_dbg_guv(ret->guvs + i, ret, i);
     }
     
-    ret->buf_pos = 0;
-    
-    init_queue(&ret->egress, 1, 1);
-    
     return ret;
 }
 
-//Struct for arguments to thread that opens a new connection
-typedef struct _open_fpga_conn_args {
-    fpga_connection_info *f;
-    new_fpga_cb *cb;
-    char *node;
-    char *serv;
-    void *user_data;
-} open_fpga_conn_args;
-
-//Thread that opens a new connection and calls a callback with either 1) the
-//completed fpga_connection_info struct or 2) an error message. By the way,
-//this thread takes care of freeing the args it was given, since it is not
-//intended to be used with pthread_join. I hope it doesn't block forever...
-static void* open_fpga_conn_thread(void *arg) {
-    new_fpga_cb_info ret;
-    int err_occurred = 0;
-    int sfd = -1;
-    
-    open_fpga_conn_args *args = (open_fpga_conn_args*)arg;
-    if (args == NULL) {
-        ret.f = NULL;
-        ret.error_str = DBG_GUV_NULL_ARG;
-        err_occurred = 1;
-        goto err_nothing;
-    }
-    
-    fpga_connection_info *f = args->f;
-    if (f == NULL) {
-        ret.f = NULL;
-        ret.error_str = DBG_GUV_NULL_CONN_INFO;
-        err_occurred = 1;
-        goto err_nothing;
-    } else {
-        ret.f = f;
-    }
-    
-    new_fpga_cb *cb = args->cb;
-    if (cb == NULL) {
-        ret.f = NULL;
-        ret.error_str = DBG_GUV_NULL_CB;
-        err_occurred = 1;
-        goto err_delete_f;
-    }
-    
-    if (args != NULL) ret.user_data = args->user_data;
-    
-    //Get address info
-    struct addrinfo *res = NULL;
-    struct addrinfo hint = {
-        .ai_family = AF_INET,
-        .ai_socktype = SOCK_STREAM,
-        .ai_protocol = 0 //Not sure if this protocol field needs to be set
-    };
-    
-    int rc = getaddrinfo(args->node, args->serv, &hint, &res);
-    if (rc < 0) {
-        //cursor_pos(1, term_rows-1);
-        //sprintf(line, "Could not resolve [%s]: %s" ERASE_TO_END "%n", args->node, gai_strerror(rc), &len);
-        //write(STDOUT_FILENO, line, len);
-        ret.f = NULL;
-        ret.error_str = gai_strerror(rc);
-        err_occurred = 1;
-        goto err_delete_f;
-    }
-    
-    //Connect the socket
-    sfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sfd < 0) {
-        //cursor_pos(1, term_rows-1);
-        //sprintf(line, "Could not open socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
-        //write(STDOUT_FILENO, line, len);
-        ret.f = NULL;
-        ret.error_str = strerror(errno);
-        err_occurred = 1;
-        goto err_freeaddrinfo;
-    }
-    f->sfd = sfd;
-    
-    rc = connect(sfd, res->ai_addr, res->ai_addrlen);
-    if (rc < 0) {
-        //cursor_pos(1, term_rows-1);
-        //sprintf(line, "Could not connect socket: %s" ERASE_TO_END "%n", strerror(errno), &len);
-        //write(STDOUT_FILENO, line, len);
-        ret.f = NULL;
-        ret.error_str = strerror(errno);
-        err_occurred = 1;
-        goto err_close_socket;
-    }
-    
-    freeaddrinfo(res);
-    //Don't forget to mark as NULL so cleanup code can deal with it properly
-    res = NULL;
-    
-    //Start the net_tx thread
-    pthread_create(&f->net_tx, NULL, fpga_egress_thread, f);
-    f->net_tx_started = 1;
-    
-    //Clean up and exit
-    if (!err_occurred) ret.error_str = DBG_GUV_SUCC;
-err_close_socket:
-    if (err_occurred) close(sfd);
-err_freeaddrinfo:
-    if (res != NULL) freeaddrinfo(res);
-err_delete_f:
-    if (err_occurred) del_fpga_connection(f);
-err_nothing:
-    //These were copied in new_fpga_connection
-    free(args->node);
-    free(args->serv);
-    free(args);
-    //Let the callback know what happened, if we have one
-    if(cb != NULL) cb(ret);
-    pthread_exit(NULL);
-}
-
-///////////////////////////////////////////
-//Implementations of prototypes in header//
-///////////////////////////////////////////
-
-//(copy comments from header once I settle on them)
-int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data) {
-    if (!cb) {
-        return -1;
-    }
-    
-    fpga_connection_info *f = construct_fpga_connection();
-    if (!f) {
-        return -1;
-    }
-    
-    open_fpga_conn_args *args = malloc(sizeof(open_fpga_conn_args));
-    if (!args) {
-        del_fpga_connection(f);
-        return -1;
-    }
-    
-    args->f = f;
-    args->cb = cb;
-    //Duplicate node and serv, since the caller might not leave them untouched
-    //for long
-    args->node = strdup(node);
-    args->serv = strdup(serv);
-    args->user_data = user_data;
-    
-    //Spin up thread that opens connection
-    pthread_t tid;
-    pthread_create(&tid, NULL, open_fpga_conn_thread, args);
-    
-    //Note: we don't pthread_join. That thread (should) end itself at some
-    //point
-    pthread_detach(tid); 
-    return 0;
-}
-
+//Cleans up an FPGA connection. Gracefully ignores NULL input
 void del_fpga_connection(fpga_connection_info *f) {
     //Gracefully quit early if f is NULL
     if (f == NULL) return;
-    
-    deinit_queue(&f->egress);
-    
-    //We gave peace a chance, but really, make sure net_tx stops
-    if (f->net_tx_started) {
-        pthread_cancel(f->net_tx);
-        pthread_join(f->net_tx, NULL);
-    }
-    f->net_tx_started = 0;
-    
-    //Try locking and unlocking all mutexes to wait until last person 
-    //relinquishes it
-    //Note that it's up to the caller to make sure no one is going to try 
-    //locking these mutexes later
+
+	//TODO: remove events?
+
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {        
         //Slow as hell... there must be a better way...
@@ -293,7 +97,6 @@ void del_fpga_connection(fpga_connection_info *f) {
 //make an internal copy of the string; you must copy it yourself if this is
 //desired
 char *append_log(dbg_guv *d, char *log) {
-    pthread_mutex_lock(&d->logs_mutex);
     linebuf *l = &d->logs;
     char *ret = linebuf_append(l, log);
     pthread_mutex_unlock(&d->logs_mutex);
@@ -301,6 +104,56 @@ char *append_log(dbg_guv *d, char *log) {
     d->need_redraw = 1;
     
     return ret;
+}
+
+//Enqueues the given data, which will be sent when the socket becomes 
+//ready next. Returns -1 and sets f->error_str on error, or 0 on success.
+//(Returns -2 if f was NULL)
+int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
+	if (f == NULL) {
+		return -2; //This is all we can do
+	}
+	
+	if(FCI_BUF_SIZE - f->out_buf_len < len) {
+		f->error_str = DBG_GUV_NOT_ENOUGH_SPACE;
+		return -1;
+	}
+	
+	//There may be an elegant solution to this, but for now I have to
+	//deal with a few ugly cases:
+	//
+	//Case 1 (no wraparound, wr > rd):
+	//  [ | | | | | |x|x|x|x| | | | | | | | ]
+	//               ^rd     ^wr   ^wr+len
+	//
+	//Case 2 (wraparound, wr > rd)
+	//  [ | | | | | |x|x|x|x| | | | | | | | ]
+	//     ^wr+len   ^rd     ^wr  
+	//
+	//Case 3 (no wraparound, wr < rd):
+	//  [x| | | | | | | | | | |x|x|x|x|x|x|x]
+	//     ^wr       ^wr+len   ^rd          
+	//
+	//Cases 1 and 3 are handled identically, so we just need to
+	//distinguish case 2 specifically
+	
+	int wr_pos = (f->out_buf_pos + f->out_buf_len) % FCI_BUF_SIZE;
+	if (wr_pos + len > FCI_BUF_SIZE) {
+		//Case 2: need to split into first and second halves
+		int first_half_len = FCI_BUF_SIZE - wr_pos - 1; //OBOE?
+		memcpy(f->out_buf + wr_pos, buf, first_half_len);
+		
+		int second_half_len = len - first_half_len;
+		memcpy(f->out_buf + 0, buf + first_half_len, second_half_len;
+		
+	} else {
+		//Case 1 or case 3: we can just directly copy in
+		memcpy(f->out_buf + wr_pos, buf, len);
+	}
+	
+	f->out_buf_len += len;
+	f->error_str = DBG_GUV_SUCC;
+	return 0;
 }
 
 //TODO: runtime sizes for the stream?
@@ -391,6 +244,58 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     return 0;
 }
 
+//Tries to write as much of f->out_buf as possible to the socket. This 
+//is non-blocking. Follows usual error return values
+int write_fpga_connection(fpga_connection_info *f, int fd) {
+    if (f == NULL) {
+        return -2; //This is all we can do
+    }
+    
+    //See how any contiguous bytes we can use from the circular buffer
+    int contig = f->out_buf_len;
+    if (f->out_buf_pos + f->out_buf_len > FCI_BUF_SIZE) {
+		contig = FCI_BUF_SIZE - f->out_buf_pos;
+	}
+	
+	int rc = write(fd, f->out_buf + f->out_buf_pos, contig);
+	if (rc < 0) {
+		//Check if this is an error we should signal to the user
+		if (rc != EAGAIN && rc != EWOULDBLOCK) {
+			f->error_str = strerror(errno);
+			return -1;
+		}
+		
+		//Technically, this should never happen, since in theory this
+		//function is only called once libevent determines that the 
+		//socket is writable. But we'll deal with this case anyway, with
+		//the caveat that well set the error string to IMPOSSIBLE
+		f->error_str = DBG_
+	} else if (rc == 0) {
+		f->error_str = DBG_GUV_IMPOSSIBLE;
+		return 0; //Nothing to do, but not an error
+	}
+	
+	//Update the position/length in the circular buffer
+	f->out_buf_pos -= rc;
+	if (f->out_buf_pos == 0) {
+		//Special case: since I don't a priori constrain the size of
+		//data appended into the outpu buffer, take this chance when
+		//the buffer is empty to move the position to the start. This
+		//minimizes some straddling.
+		f->out_buf_pos = 0;
+	} else {
+		f->out_buf_pos += rc;
+		f->out_buf_pos %= FCI_BUF_SIZE;
+		//Also, we need to reschedule the write event given that there
+		//is still data to send
+		#warning Error code not checked
+		event_add(f->wr_ev);
+	}
+	
+	f->error_str = DBG_GUV_SUCC;
+	return 0;
+}
+
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
 void dbg_guv_set_name(dbg_guv *d, char *name) {
@@ -457,9 +362,7 @@ int draw_fn_dbg_guv(void *item, int x, int y, int w, int h, char *buf) {
     //Now simply draw the linebuf in the remaining space, if there is 
     //any
     if (h > 0) {
-		pthread_mutex_lock(&d->logs_mutex);
 		incr = draw_linebuf(&d->logs, d->log_pos, x, y, w, h, buf);
-		pthread_mutex_unlock(&d->logs_mutex);
 		
 		if (incr < 0) {
 			//Propagate error, not that it really matters...

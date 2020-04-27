@@ -1,7 +1,6 @@
 #ifndef DBG_GUV_H
 #define DBG_GUV_H 1
 
-#include <pthread.h>
 #include <event2/event.h>
 #include "queue.h"
 #include "textio.h"
@@ -66,7 +65,6 @@ struct _fpga_connection_info;
 typedef struct _dbg_guv {
     //Stores messages received from FGPAs
     linebuf logs;
-    pthread_mutex_t logs_mutex; //The logs can be accessed from more than one thread
     int log_pos;
     char *name;
     int need_redraw;
@@ -114,25 +112,21 @@ typedef struct _fpga_connection_info {
     //structs also contain the log buffer
     dbg_guv guvs[MAX_GUVS_PER_FPGA];
     
-    //Network connection info
-    struct sockaddr *addr;
-    int addr_len;
-    int sfd;
-    struct event *ev; //Event for reading input
+    //Fields for reading from socket
+    struct event *rd_ev; 
+    char in_buf[FCI_BUF_SIZE]; //If a message straddles two network 
+                               //packets, this buffer will hold on to 
+                               //partially received messages.
+    int in_buf_pos;            //Position in input buffer.
+    
+    //Fields for writing to socket
+    struct event *wr_ev;
+    char out_buf[FCI_BUF_SIZE]; //Ring buffer of data to send on the
+                                //socket when it is next available.
+    int out_buf_pos, out_buf_len;
     
     //Name used in symbol table
     char *name;
-    
-    //General-purpose buffer, but I only use it for network ingress data
-    char buf[FCI_BUF_SIZE];
-    int buf_pos;
-    
-    //Other threads can enqueue dbg_guv command messages on egress queue
-    queue egress;
-    //This is the thread ID for the thread that empties egress and sends 
-    //commands to the FPGA
-    pthread_t net_tx;
-    int net_tx_started;
     
     //Error information
     char const* error_str;
@@ -160,21 +154,12 @@ typedef struct _dbg_guv_it {
     int addr;
 } dbg_guv_it;
 
-//Idea: this function should take a callback as an argument. This callback
-//will be called from inside a new thread once the socket is connected (or
-//some kind of error occurs)
-//Then, in the main thread, we simply maintain a list of active file 
-//descriptors and run an event loop using poll(). Of course, if we were a
-//little smarter about having, say, four threads working together, then it
-//might have better performance. But that's out of scope for what we need
-//here.
-//Aaaaanyway, the main thread uses the callbacks to maintain that list of
-//fds to poll on. Also, it is this thread that needs the smarts to deal with
-//command receipts
-int new_fpga_connection(new_fpga_cb *cb, char *node, char *serv, void *user_data);
+//Returns a newly allocated and constructed fpga_connection_info struct,
+//or NULL on error
+//TODO: make dbg_guv widths parameters to this function?
+int new_fpga_connection();
 
-//Cleans up an FPGA connection. Note that it will block as it waits for 
-//threads to close; do NOT call while holding a mutex!
+//Cleans up an FPGA connection. Gracefully ignores NULL input
 void del_fpga_connection(fpga_connection_info *f);
 
 //Returns string which was displaced by new log. This can be NULL. NOTE: 
@@ -185,6 +170,10 @@ char *append_log(dbg_guv *d, char *log);
 
 //TODO: runtime sizes for the stream
 int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
+
+//Tries to write as much of f->out_buf as possible to the socket. This 
+//is non-blocking. Follows usual error return values
+int write_fpga_connection(fpga_connection_info *f, int fd);
 
 //Duplicates string in name and saves it into d. If name was previously set, it
 //will be freed
@@ -216,5 +205,9 @@ extern char const *const DBG_GUV_NULL_ARG; //= "received NULL argument";
 extern char const *const DBG_GUV_NULL_CB; //= "received NULL callback";
 extern char const *const DBG_GUV_NULL_CONN_INFO; //= "received NULL fpga_connection_info";
 extern char const *const DBG_GUV_CNX_CLOSED; //= "external host closed connection";
+extern char const *const DBG_GUV_IMPOSSIBLE; //= "code reached a location that Marco thought was impossible";
+extern char const *const DBG_GUV_BAD_ADDRESS; //= "could not resolve address";
+extern char const *const DBG_GUV_OOM; //= "out of memory";
+extern char const *const DBG_GUV_NOT_ENOUGH_SPACE; //= "not enough room in buffer";
 
 #endif
