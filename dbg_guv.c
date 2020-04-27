@@ -17,7 +17,7 @@ char const *const DBG_GUV_NULL_CB = "received NULL callback";
 char const *const DBG_GUV_NULL_CONN_INFO = "received NULL fpga_connection_info";
 char const *const DBG_GUV_CNX_CLOSED = "external host closed connection";
 char const *const DBG_GUV_IMPOSSIBLE = "code reached a location that Marco thought was impossible";
-char const *const DBG_GUV BAD_ADDRESS = "could not resolve address";
+char const *const DBG_GUV_BAD_ADDRESS = "could not resolve address";
 char const *const DBG_GUV_OOM = "out of memory";
 char const *const DBG_GUV_NOT_ENOUGH_SPACE = "not enough room in buffer";
 
@@ -99,7 +99,6 @@ void del_fpga_connection(fpga_connection_info *f) {
 char *append_log(dbg_guv *d, char *log) {
     linebuf *l = &d->logs;
     char *ret = linebuf_append(l, log);
-    pthread_mutex_unlock(&d->logs_mutex);
     
     d->need_redraw = 1;
     
@@ -144,7 +143,7 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 		memcpy(f->out_buf + wr_pos, buf, first_half_len);
 		
 		int second_half_len = len - first_half_len;
-		memcpy(f->out_buf + 0, buf + first_half_len, second_half_len;
+		memcpy(f->out_buf + 0, buf + first_half_len, second_half_len);
 		
 	} else {
 		//Case 1 or case 3: we can just directly copy in
@@ -166,7 +165,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     //Try reading as many bytes as we have space for. Note: this
     //is kind of ugly, but because we might only read part of a 
     //message, we need to save partial messages in a buffer
-    int num_read = read(fd, f->buf + f->buf_pos, FCI_BUF_SIZE - f->buf_pos);
+    int num_read = read(fd, f->in_buf + f->in_buf_pos, FCI_BUF_SIZE - f->in_buf_pos);
     if (num_read < 0) {
         f->error_str = strerror(errno);
         return -1;
@@ -174,13 +173,13 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
         f->error_str = DBG_GUV_CNX_CLOSED;
         return -1;
     }
-    f->buf_pos += num_read;
+    f->in_buf_pos += num_read;
     
     //For each complete command in the buffer, dispatch to correct guv
     
     #warning Be careful about endianness, and implement runtime sizes
-    unsigned *rd_pos = (unsigned *)f->buf; //TODO: manage endianness
-    int msgs_left = (f->buf_pos / 8); //TODO: runtime size
+    unsigned *rd_pos = (unsigned *)f->in_buf; //TODO: manage endianness
+    int msgs_left = (f->in_buf_pos / 8); //TODO: runtime size
     
     //Iterate through all the complete messages in the read buffer
     while (msgs_left --> 0) {
@@ -234,12 +233,12 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     //is left and shift it to the beginning of the buffer
     int i;
     #warning Need to handle runtime parameter for size
-    int leftover_bytes = f->buf_pos % 8; //TODO: runtime size
-    f->buf_pos -= leftover_bytes;
+    int leftover_bytes = f->in_buf_pos % 8; //TODO: runtime size
+    f->in_buf_pos -= leftover_bytes;
     for (i = 0; i < leftover_bytes; i++) {
-        f->buf[i] = f->buf[f->buf_pos++];
+        f->in_buf[i] = f->in_buf[f->in_buf_pos++];
     }
-    f->buf_pos = i;
+    f->in_buf_pos = i;
     
     return 0;
 }
@@ -269,10 +268,11 @@ int write_fpga_connection(fpga_connection_info *f, int fd) {
 		//function is only called once libevent determines that the 
 		//socket is writable. But we'll deal with this case anyway, with
 		//the caveat that well set the error string to IMPOSSIBLE
-		f->error_str = DBG_
-	} else if (rc == 0) {
 		f->error_str = DBG_GUV_IMPOSSIBLE;
 		return 0; //Nothing to do, but not an error
+	} else if (rc == 0) {
+		f->error_str = DBG_GUV_CNX_CLOSED;
+		return -1;
 	}
 	
 	//Update the position/length in the circular buffer
@@ -289,7 +289,7 @@ int write_fpga_connection(fpga_connection_info *f, int fd) {
 		//Also, we need to reschedule the write event given that there
 		//is still data to send
 		#warning Error code not checked
-		event_add(f->wr_ev);
+		event_add(f->wr_ev, NULL);
 	}
 	
 	f->error_str = DBG_GUV_SUCC;

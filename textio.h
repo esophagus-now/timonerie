@@ -2,7 +2,6 @@
 #define TEXTIO_H 1
 
 #include <termios.h>
-#include "queue.h"
 #include "twm.h"
 
 #define ESCAPE "\x1b"

@@ -6,7 +6,6 @@
 #include "dbg_guv.h"
 #include "timonier.h"
 #include "textio.h"
-#include "queue.h"
 
 //Global lists of manager update functions
 guv_list fast_update_head = {
@@ -169,8 +168,6 @@ typedef struct _fio {
     fio_file_state_t log_state;
     char log_file[MAX_FIO_NAME_SZ+1];
     int log_fd;
-    pthread_t log_thd;
-    queue log_queue; 
     int log_numsaved;
     char const *log_error_str;
     //Hideous problem: what do we do if the received data is faster than
@@ -199,9 +196,7 @@ static int init_fio(dbg_guv *owner) {
     mgr->send_state = FIO_NOFILE;
     mgr->log_state = FIO_NOFILE;
     
-    init_queue(&mgr->log_queue, 1, 1);
-    
-    //TODO: spin up egress thread
+    //TODO: hook up event for writing to file
     
     owner->mgr = mgr;
     return 0;
@@ -329,8 +324,7 @@ static void trigger_redraw_fio(void *item) {
 static void cleanup_fio(dbg_guv *owner) {
     fio *mgr = owner->mgr;
     if (mgr) {
-        deinit_queue(&mgr->log_queue);
-        //TODO: close egress thread
+        //TODO: delete write event
         //TODO: close any open files
         free(mgr);
     }

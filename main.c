@@ -53,9 +53,8 @@ fci_list fci_head = {
 };
 
 //Prototypes for helper functions
-int get_nb_sock(char const *node, char const *serv, char **error_str);
+int get_nb_sock(char const *node, char const *serv, char const* *error_str);
 void cleanup_fpga_connection(fpga_connection_info *f);
-void fpga_conn_cb(new_fpga_cb_info info); //Forward-declare
 
 void twm_resize_cb(void) {                        
     int rc = twm_tree_redraw(t);
@@ -82,7 +81,7 @@ void draw_cb(evutil_socket_t fd, short what, void *arg) {
 void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
     fpga_connection_info *f = arg;
     
-    int rc = read_fpga_connection(f, f->sfd, 4);
+    int rc = read_fpga_connection(f, fd, 4);
     if (rc < 0) {
         char errmsg[80];
         sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
@@ -94,7 +93,7 @@ void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
 void fpga_write_cb(evutil_socket_t fd, short what, void *arg) {
     fpga_connection_info *f = arg;
     
-    int rc = write_fpga_connection(f, f->sfd);
+    int rc = write_fpga_connection(f, fd);
     if (rc < 0) {
         char errmsg[80];
         sprintf(errmsg, "Could not write to FPGA: %s. Closing...", f->error_str);
@@ -116,7 +115,7 @@ void fpga_conn_cb(evutil_socket_t fd, short what, void *arg) {
     
     //Check if connection succeeded
     int rc, result;
-    rc = getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, sizeof(int));
+    rc = getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, (socklen_t[1]){sizeof(int)});
     //Pedantic, but read Henry Spencer's 10 Commandments of C vis-à-vis
     //checking error return codes
     if (rc < 0) {
@@ -384,7 +383,7 @@ void got_rl_line(char *str) {
                 break;
             }
             
-            char *error_str;
+            char const *error_str;
             int sfd = get_nb_sock(cmd.node, cmd.serv, &error_str);
             
             if (sfd < 0) {
@@ -727,7 +726,7 @@ int main(int argc, char **argv) {
 //non-blocking socket. Returns the file decsriptor on success, or -1 on
 //error. In this case, if the given error_str pointer is non-NULL, stores
 //a printable error string to explain the cause of failure
-int get_nb_sock(char const *node, char const *serv, char **error_str) {
+int get_nb_sock(char const *node, char const *serv, char const* *error_str) {
     int sfd = -1;
     
     //Try to resolve address
@@ -749,7 +748,7 @@ int get_nb_sock(char const *node, char const *serv, char **error_str) {
     if (sfd < 0) {
         if (error_str) *error_str = strerror(errno);
         freeaddrinfo(res);
-        return -1
+        return -1;
     }
     
     //Connect the socket

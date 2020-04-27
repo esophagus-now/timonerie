@@ -8,7 +8,6 @@
 #include <unistd.h> //isatty
 #include <sys/ioctl.h> //ioctl, in order to get terminal size
 #include "textio.h"
-#include "queue.h"
 #include "coroutine.h"
 
 //These variables hang onto the old tty state so we can return to it when 

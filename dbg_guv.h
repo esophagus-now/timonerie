@@ -2,7 +2,6 @@
 #define DBG_GUV_H 1
 
 #include <event2/event.h>
-#include "queue.h"
 #include "textio.h"
 #include "twm.h"
 #include "dbg_cmd.h"
@@ -157,7 +156,7 @@ typedef struct _dbg_guv_it {
 //Returns a newly allocated and constructed fpga_connection_info struct,
 //or NULL on error
 //TODO: make dbg_guv widths parameters to this function?
-int new_fpga_connection();
+fpga_connection_info* new_fpga_connection();
 
 //Cleans up an FPGA connection. Gracefully ignores NULL input
 void del_fpga_connection(fpga_connection_info *f);
@@ -167,6 +166,11 @@ void del_fpga_connection(fpga_connection_info *f);
 //make an internal copy of the string; you must copy it yourself if this is
 //desired
 char *append_log(dbg_guv *d, char *log);
+
+//Enqueues the given data, which will be sent when the socket becomes 
+//ready next. Returns -1 and sets f->error_str on error, or 0 on success.
+//(Returns -2 if f was NULL)
+int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len);
 
 //TODO: runtime sizes for the stream
 int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
