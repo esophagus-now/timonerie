@@ -23,7 +23,56 @@ extern msg_win *err_log;
 static int got_line_inter(dbg_guv *owner, char const *str) {
 	dbg_cmd cmd;
     int rc = parse_dbg_reg_cmd(&cmd, str);
-    //TODO actually send values
+    if (rc < 0) {
+		owner->error_str = cmd.error_str;
+		return rc;
+	}
+	
+	char line[80];
+	int len;
+	
+	cursor_pos(1, term_rows-1);
+	if (cmd.reg == LATCH) {
+		sprintf(line, "Committing values to %s" ERASE_TO_END "%n", owner->name, &len);
+	} else {
+		sprintf(line, "Writing 0x%08x (%u) to %s::%s" ERASE_TO_END "%n", 
+			cmd.param, 
+			cmd.param,
+			owner->name,
+			DBG_GUV_REG_NAMES[cmd.reg],
+			&len
+		);
+	}
+	write(1, line, len);
+	
+	//These are the only fields not updated by the command receipt
+	switch (cmd.reg) {
+	case DROP_CNT:
+		owner->drop_cnt = cmd.param;
+		break;
+	case LOG_CNT:
+		owner->log_cnt = cmd.param;
+		break;
+	case INJ_TDATA:
+		owner->inj_TDATA = cmd.param;
+		break;
+	case INJ_TLAST:
+		owner->inj_TLAST = cmd.param;
+		break;
+	case DUT_RESET:
+		owner->dut_reset = cmd.param;
+		break;
+	default:
+		//Just here to get rid of warning for not using everything in the enum
+		break;
+	}
+	
+	//Actually send the command
+	rc = dbg_guv_send_cmd(owner, cmd.reg, cmd.param);
+	if (rc < 0) {
+		sprintf(line, "Could not enqueue command: %s", owner->parent->error_str);
+		msg_win_dynamic_append(err_log, line);
+	}
     
     return rc;
 }
