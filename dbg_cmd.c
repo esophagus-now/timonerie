@@ -10,13 +10,6 @@
 #define stringify(x) xstr(x)
 
 #define X(x) #x
-char const *DBG_GUV_REG_NAMES[] = {
-    DBG_GUV_REG_IDENTS
-};
-#undef X
-
-
-#define X(x) #x
 char const *DBG_CMD_NAMES[] = {
     DBG_CMD_IDENTS
 };
@@ -565,10 +558,8 @@ static cmd_info builtin_cmds[] = {
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
-//(unless dest is NULL, of course). On success returns 0. The active 
-//dbg_guv is passed in (or NULL if there are no active guvs) in case the
-//guv has its own command interpreter
-int parse_dbg_cmd(dbg_cmd *dest, char const *str, dbg_guv *active) {
+//(unless dest is NULL, of course). On success returns 0. 
+int parse_dbg_cmd(dbg_cmd *dest, char const *str) {
     //Sanity check on inputs
     if (dest == NULL) {
         return -2; //This is all we can do
@@ -596,14 +587,6 @@ int parse_dbg_cmd(dbg_cmd *dest, char const *str, dbg_guv *active) {
             }
             
             return 0;
-        }
-    }
-   
-    //At this point, we did not match a built-in command. Now see if there
-    //is an active dbg_guv, and ask it if it can use this command string
-    if (active != NULL) {
-        if (active->ops.got_line != NULL) {
-            return active->ops.got_line(active, str, dest);
         }
     }
    

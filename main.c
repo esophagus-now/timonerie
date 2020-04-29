@@ -129,9 +129,9 @@ void fpga_conn_cb(evutil_socket_t fd, short what, void *arg) {
         return;
 	}
     //Now we can actually check the connection status
-    if (result < 0) {
+    if (result != 0) {
         char line[80];
-        sprintf(line, "Could not connect to FPGA: %s", strerror(errno));
+        sprintf(line, "Could not connect to FPGA: %s", strerror(result));
         msg_win_dynamic_append(err_log, line);
         symtab_array_remove(ids, e);
         close(fd);
@@ -353,8 +353,21 @@ void got_rl_line(char *str) {
         //Try to find active dbg_guv
         dbg_guv *g = twm_tree_get_focused_as(t, draw_fn_dbg_guv);
         
-        int rc = parse_dbg_cmd(&cmd, str, g);
+        int rc = parse_dbg_cmd(&cmd, str);
         if (rc < 0) {
+			//At this point, we did not match a built-in command. Now 
+			//see if there Is an active dbg_guv, and ask it if it can 
+			//use this command string
+			if (g != NULL && g->ops.got_line != NULL) {
+				rc = g->ops.got_line(g, str);
+				cmd.type = CMD_HANDLED;
+				//Propagate error string in case an error occurred
+				cmd.error_str = g->error_str;
+			}
+		}
+		
+        if (rc < 0) {
+			//Okay, we are really out of options
             cursor_pos(1, term_rows-1);
             sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
             write(1, line, len);
@@ -584,10 +597,11 @@ void got_rl_line(char *str) {
             twm_tree_add_window(t, d, dummy_ops);
             return;
         }
-        case CMD_QUIT: 
+        case CMD_QUIT: {
             //end libevent event loop
             event_base_loopbreak(ev_base);
             break;
+        }
         case CMD_DBG_REG: {
             if (g == NULL) {
                 cursor_pos(1, term_rows-1);
@@ -651,6 +665,10 @@ void got_rl_line(char *str) {
 			}
             break;
         }
+        case CMD_HANDLED: {
+			//Nothing to do
+			return;
+		}
         default: {
             cursor_pos(1, term_rows-1);
             sprintf(line, "Received a %s command" ERASE_TO_END "%n", DBG_CMD_NAMES[cmd.type], &len);

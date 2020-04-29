@@ -11,6 +11,13 @@
 #include "textio.h"
 #include "timonier.h"
 
+
+#define X(x) #x
+char const *DBG_GUV_REG_NAMES[] = {
+    DBG_GUV_REG_IDENTS
+};
+#undef X
+
 char const *const DBG_GUV_SUCC = "success";
 char const *const DBG_GUV_NULL_ARG = "received NULL argument";
 char const *const DBG_GUV_NULL_CB = "received NULL callback";

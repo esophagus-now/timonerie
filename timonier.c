@@ -1,70 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
+#include <event2/event.h>
+#include <unistd.h>
 #include "dbg_cmd.h"
 #include "twm.h"
 #include "dbg_guv.h"
 #include "timonier.h"
 #include "textio.h"
-
-//Global lists of manager update functions
-guv_list fast_update_head = {
-    .d = NULL,
-    .next = &fast_update_head,
-    .prev = &fast_update_head
-};
-
-guv_list slow_update_head = {
-    .d = NULL,
-    .next = &slow_update_head,
-    .prev = &slow_update_head
-};
-
-void register_fast_update(dbg_guv *d) {
-    #warning This malloc can fail
-    guv_list *to_insert = malloc(sizeof(guv_list));
-    to_insert->d = d;
-    to_insert->next = fast_update_head.next;
-    to_insert->prev = &fast_update_head;
-    fast_update_head.next->prev = to_insert;
-    fast_update_head.prev->next = to_insert;
-}
-
-void register_slow_update(dbg_guv *d) {
-    #warning This malloc can fail
-    guv_list *to_insert = malloc(sizeof(guv_list));
-    to_insert->d = d;
-    to_insert->next = slow_update_head.next;
-    to_insert->prev = &slow_update_head;
-    slow_update_head.next->prev = to_insert;
-    slow_update_head.prev->next = to_insert;
-}
-
-void deregister_fast_update(dbg_guv *d) {
-    guv_list *cur = fast_update_head.next;
-    while (cur != &fast_update_head) {
-        if (cur->d == d) {
-            cur->prev->next = cur->next;
-            cur->next->prev = cur->prev;
-            free(cur);
-            break;
-        }
-        cur = cur->next;
-    }
-}
-
-void deregister_slow_update(dbg_guv *d) {
-    guv_list *cur = slow_update_head.next;
-    while (cur != &slow_update_head) {
-        if (cur->d == d) {
-            cur->prev->next = cur->next;
-            cur->next->prev = cur->prev;
-            free(cur);
-            break;
-        }
-        cur = cur->next;
-    }
-}
+#include "coroutine.h"
 
 //I don't feel bad about this global variable being here, since I really 
 //only moved this stuff out of main.c to keep the code files more organized.
@@ -75,8 +20,12 @@ extern msg_win *err_log;
 //"better" approach
 
 //Default got_line function (interactive commands)
-static int got_line_inter(dbg_guv *owner, char const *str, dbg_cmd *dest) {
-    return parse_dbg_reg_cmd(dest, str);
+static int got_line_inter(dbg_guv *owner, char const *str) {
+	dbg_cmd cmd;
+    int rc = parse_dbg_reg_cmd(&cmd, str);
+    //TODO actually send values
+    
+    return rc;
 }
 
 static int lines_req_inter(dbg_guv *owner, int w, int h) {
@@ -155,14 +104,28 @@ typedef enum _fio_state_t {
     FIO_ERROR
 } fio_file_state_t;
 
-#define MAX_FIO_NAME_SZ
+#define MAX_FIO_NAME_SZ 64
+#define FIO_BUF_SIZE 512
 typedef struct _fio {
+	dbg_guv *owner;
+	
     //Input file
     fio_file_state_t send_state;
+    fio_file_state_t __old_send_state; //Used by the FSM for resuming after pause
+    int send_retries; //If an inject fails, we try again after 5 ms, 
+                      //then 50 ms, then 5000 ms. If the inject still
+                      //hasn't succeeded, then we error out
+    int send_pause; //If 1, the state machine will pause at its earliest
+                    //convenience. To unpause, set this to 0 and call 
+                    //the sendfile_fsm function again.
     char send_file[MAX_FIO_NAME_SZ+1];
     int send_fd;
     int send_bytes;
     char const *send_error_str;
+    //Input buffer and read event
+    char in_buf[FIO_BUF_SIZE];
+    int in_buf_pos;
+    struct event *file_rd_ev;
     
     //Output file
     fio_file_state_t log_state;
@@ -170,11 +133,42 @@ typedef struct _fio {
     int log_fd;
     int log_numsaved;
     char const *log_error_str;
-    //Hideous problem: what do we do if the received data is faster than
-    //what we can save to disk? I do think this is possible if the OS is
-    //doing a lot of file I/O in the background. Right now my "solution" is
-    //to simply quit with an overflow error
+    //Output buffer and write event
+    char out_buf[FIO_BUF_SIZE];
+    int out_buf_pos, out_buf_len;
+    int lo_wmark; //If output buffer goes below this level, the dbg_guv
+                  //is told to unpause
+    int hi_wmark; //If output buffer goes above this level, the dbg_guv
+                  //is told to pause
+    struct event *file_wr_ev;
 } fio;
+
+//Handles event to read from input file
+static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
+	fio *f = arg;
+	
+	int rc = read(fd, f->in_buf, FIO_BUF_SIZE - f->in_buf_pos);
+	if (rc < 0) {
+		f->send_state = FIO_ERROR;
+		f->send_error_str = strerror(errno);
+		return;
+	} else if (rc == 0) {
+		//If we are at the end of the file, we expect our input buffer
+		//to be completely consumed. Make sure this is the case
+		if (f->in_buf_pos != 0) {
+			f->send_error_str = FIO_STRAGGLERS;
+			f->send_state = FIO_ERROR;
+			return;
+		}
+		f->send_state = FIO_DONE;
+		f->send_error_str = FIO_SUCCESS;
+		return;
+	}
+	
+	f->in_buf_pos += rc;
+	f->send_error_str = FIO_SUCCESS;
+	return;
+}
 
 /*
 static int filename_from_path(char const *path, char *dest) {
@@ -187,6 +181,118 @@ static int filename_from_path(char const *path, char *dest) {
     strncpy(dest, path + slash_ind + 1, MAX_FIO_NAME_SZ);
 }
 */
+
+static void retry_inject(evutil_socket_t fd, short what, void *arg) {
+	fio *f = arg;
+	//TODO: write commit command
+}
+
+//Yes, this has the classic performance problem that we make a ton of
+//small read() system calls... but who cares?
+//Returns 0 on success, -1 on error, setting f->send_error_str if possible
+static int sendfile_fsm(fio *f) {
+	if(f->send_pause) {
+		if (f->send_state == FIO_PAUSED) {
+			//The function was called before unpausing. I treat this as
+			//an error
+			f->send_state = FIO_ERROR;
+			f->send_error_str = FIO_WOKE_EARLY;
+			return -1;
+		}
+		//Save where we currently are so we can come back later
+		f->__old_send_state = f->send_state;
+		f->send_state = FIO_PAUSED;
+		f->send_error_str = FIO_SUCCESS;
+		return 0;
+	} else if (f->send_state == FIO_PAUSED) {
+		//Pick up where we left off
+		f->send_state = f->__old_send_state;
+	}
+
+//This indentation may look horrific, but ¯\_(ツ)_/¯
+switch (f->send_state) {
+
+case FIO_NOFILE: {
+	f->send_error_str = FIO_NONE_OPEN;
+	return -1;
+}
+
+case FIO_IDLE: {
+	//User has opened the file and wishes to send it
+	#warning Error code is not checked
+	event_add(f->file_rd_ev, NULL);
+	//The next time sendfile_fsm is called is from within the read event handler
+	f->send_state = FIO_SENDING;
+	f->send_error_str = FIO_SUCCESS;
+	return 0;
+}
+
+case FIO_SENDING: {
+	//TODO: write inject values from in_buf and commit 
+	f->send_state = FIO_WAIT_ACK;
+	f->send_retries = 0; //Reset retry counter
+	//The next time sendfile_fsm is called is from within fio_cmd_receipt
+	f->send_error_str = FIO_SUCCESS;
+	return 0;
+}
+
+case FIO_WAIT_ACK: {
+	//Check if inject failed
+	if(f->owner->inj_failed) {
+		//Too many retries. Fail with an error
+		if (f->send_retries > 2) {
+			f->send_error_str = FIO_INJ_TIMEOUT;
+			f->send_state = FIO_ERROR;
+			return -1;
+		}
+		//Wait 5 ms on first retry, 50 ms on second, 2 sec on third
+		struct timeval dly = {
+			.tv_sec = (f->send_retries == 2) ? 2 : 0,
+			.tv_usec = (f->send_retries == 1) ? 50000 : 5000
+		};
+		f->send_retries++;
+		
+		//Schedule retry_commit after the calculated delay
+		#warning Return value not checked
+		struct event_base *eb = event_get_base(f->file_rd_ev);
+		event_base_once(eb, -1, EV_TIMEOUT, retry_inject, f, &dly);
+		f->send_error_str = FIO_SUCCESS;
+		return 0;
+	} else {
+		#warning Change this to use runtime size parameters
+		//If we don't have enough data in the read buffer, schedul a new
+		//read event and wait for it
+		if (f->in_buf_pos < 8) {
+			#warning Error code is not checked
+			event_add(f->file_rd_ev, NULL);
+			//The next time this function is called is from within the read event handler
+			f->send_state = FIO_SENDING;
+			f->send_error_str = FIO_SUCCESS;
+			return 0;
+		} else {
+			//Send the next flit and wait for it
+			//TODO: write inject values from in_buf and commit 
+			//f->send_state = FIO_WAIT_ACK; //Only written to remind me that this state loops back on itself
+			f->send_error_str = FIO_SUCCESS;
+			return 0;
+		}
+	}
+}
+
+case FIO_ERROR: {
+	//f->send_error_str already set
+	return -1;
+}
+
+case FIO_PAUSED:
+default: {
+	f->send_state = FIO_ERROR;
+	f->send_error_str = FIO_IMPOSSIBLE;
+	return -1;
+}
+
+}
+}
 
 static int init_fio(dbg_guv *owner) {
     fio *mgr = calloc(1, sizeof(fio));
@@ -203,10 +309,14 @@ static int init_fio(dbg_guv *owner) {
 }
 
 //File I/O got_line function
-static int got_line_fio(dbg_guv *owner, char const *str, dbg_cmd *dest) {
+static int got_line_fio(dbg_guv *owner, char const *str) {
     //TEMPORARY: defer to regular commands just for the sake of incremental
     //testing
-    return parse_dbg_reg_cmd(dest, str);
+	dbg_cmd cmd;
+    int rc = parse_dbg_reg_cmd(&cmd, str);
+    //TODO actually send values
+    
+    return rc;
 }
 
 static int lines_req_fio(dbg_guv *owner, int w, int h) {
@@ -324,7 +434,7 @@ static void trigger_redraw_fio(void *item) {
 static void cleanup_fio(dbg_guv *owner) {
     fio *mgr = owner->mgr;
     if (mgr) {
-        //TODO: delete write event
+        //TODO: delete read/write events
         //TODO: close any open files
         free(mgr);
     }
@@ -344,3 +454,11 @@ guv_operations const fio_guv_ops = {
     },
     .cleanup_mgr = cleanup_fio
 };
+
+char const * const FIO_SUCCESS = "success";
+char const * const FIO_NONE_OPEN = "no open file";
+char const * const FIO_OVERFLOW = "buffer overflowed";
+char const * const FIO_INJ_TIMEOUT = "inject timeout";
+char const * const FIO_WOKE_EARLY = "got an unexpected event while paused";
+char const * const FIO_IMPOSSIBLE = "code reached a location that Marco thought was impossible";
+char const * const FIO_STRAGGLERS = "got EOF, but partial message leftover";

@@ -1,30 +1,7 @@
 #ifndef DBG_CMD_H
 #define DBG_CMD_H 1
-#include "dbg_guv.h"
 #include "symtab.h"
-
-//Fixes an ugly circular reference
-struct _dbg_guv;
-
-//The trick here is that the register names will match to the correct
-//register address in the enum.
-#define DBG_GUV_REG_IDENTS \
-    X(DROP_CNT      ),\
-    X(LOG_CNT       ),\
-    X(INJ_TDATA     ),\
-    X(INJ_TVALID    ),\
-    X(INJ_TLAST     ),\
-    X(INJ_TKEEP     ),\
-    X(INJ_TDEST     ),\
-    X(INJ_TID       ),\
-    X(KEEP_PAUSING  ),\
-    X(KEEP_LOGGING  ),\
-    X(KEEP_DROPPING ),\
-    X(DUT_RESET     ),\
-    X(UNUSED_12        ),\
-    X(UNUSED_13        ),\
-    X(UNUSED_14        ),\
-    X(LATCH            ),\
+#include "dbg_guv.h"
 
 #define DBG_CMD_IDENTS \
     X(CMD_DUMMY),\
@@ -37,15 +14,6 @@ struct _dbg_guv;
     X(CMD_MSG),\
     X(CMD_QUIT),\
     X(CMD_HANDLED)
-    
-
-#define X(x) x
-typedef enum _dbg_reg_type {
-    DBG_GUV_REG_IDENTS
-} dbg_reg_type;
-#undef X
-
-extern char const *DBG_GUV_REG_NAMES[];
 
 #define X(x) x
 typedef enum _dbg_cmd_type {
@@ -100,10 +68,8 @@ int parse_dbg_reg_cmd(dbg_cmd *dest, char const *str);
 
 //Attempts to parse str containing a dbg_guv command. Fills dbg_cmd
 //pointed to by dest. On error, returns negative and fills dest->error_str
-//(unless dest is NULL, of course). On success returns 0. The active 
-//dbg_guv is passed in (or NULL if there are no active guvs) in case the
-//guv has its own command interpreter
-int parse_dbg_cmd(dbg_cmd *dest, char const *str, struct _dbg_guv *active);
+//(unless dest is NULL, of course). On success returns 0.
+int parse_dbg_cmd(dbg_cmd *dest, char const *str);
 
 
 //////////////////////////////////////////////////

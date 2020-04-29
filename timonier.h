@@ -3,35 +3,22 @@
 
 //This file collects some different dbg_guv managers
 
-#include "dbg_cmd.h"
 #include "twm.h"
 #include "dbg_guv.h"
-
-//Global list of fast and slow callbacks, plus methods to modify it
-typedef struct _guv_list {
-    dbg_guv *d;
-    struct _guv_list *next;
-    struct _guv_list *prev;
-} guv_list;
-
-extern guv_list fast_update_head;
-extern guv_list slow_update_head;
-
-void register_fast_update(dbg_guv *d);
-void register_slow_update(dbg_guv *d);
-void deregister_fast_update(dbg_guv *d);
-void deregister_slow_update(dbg_guv *d);
 
 //Default manager: defaults to parsing a "set" command and has no associated
 //state struct
 extern guv_operations const default_guv_ops;
 
-//File transmission manager
-typedef struct _file_tx_timonier {
-    int fd;
-    //etc, I'll finish this once I have the basic stuff up and running
-} file_tx_manager;
-
+//File I/O manager
 extern guv_operations const fio_guv_ops;
+
+extern char const * const FIO_SUCCESS;// = "success";
+extern char const * const FIO_NONE_OPEN;// = "no open file";
+extern char const * const FIO_OVERFLOW;// = "buffer overflowed";
+extern char const * const FIO_INJ_TIMEOUT;// = "inject timeout";
+extern char const * const FIO_WOKE_EARLY;// = "got an unexpected event while paused";
+extern char const * const FIO_IMPOSSIBLE;// = "code reached a location that Marco thought was impossible";
+extern char const * const FIO_STRAGGLERS;// = "got EOF, but partial message leftover";
 
 #endif

@@ -4,21 +4,44 @@
 #include <event2/event.h>
 #include "textio.h"
 #include "twm.h"
-#include "dbg_cmd.h"
 
-struct _dbg_cmd; //This is a more serious circular reference... fix?
+//The trick here is that the register names will match to the correct
+//register address in the enum.
+#define DBG_GUV_REG_IDENTS \
+    X(DROP_CNT      ),\
+    X(LOG_CNT       ),\
+    X(INJ_TDATA     ),\
+    X(INJ_TVALID    ),\
+    X(INJ_TLAST     ),\
+    X(INJ_TKEEP     ),\
+    X(INJ_TDEST     ),\
+    X(INJ_TID       ),\
+    X(KEEP_PAUSING  ),\
+    X(KEEP_LOGGING  ),\
+    X(KEEP_DROPPING ),\
+    X(DUT_RESET     ),\
+    X(UNUSED_12        ),\
+    X(UNUSED_13        ),\
+    X(UNUSED_14        ),\
+    X(LATCH            ),\
 
-struct _dbg_guv; //Fix circular reference
+#define X(x) x
+typedef enum _dbg_reg_type {
+    DBG_GUV_REG_IDENTS
+} dbg_reg_type;
+#undef X
+
+extern char const *DBG_GUV_REG_NAMES[];
+
+struct _dbg_guv; //Forward-declare
 
 //When a new manager is applied to a debug, its init callback is triggered.
 //This is optional. Return 0 on success, -1 on error.
 typedef int init_mgr_fn(struct _dbg_guv *owner);
 
 //If the user types in a command which is not one of the builtins, the 
-//entire command is instead sent to the focused dbg_guv window. The dbg_cmd
-//struct is used in case this timonier wants to
-//use one of the builtin functions (and for returning errors)
-typedef int got_line_fn(struct _dbg_guv *owner, char const *str, struct _dbg_cmd *dest);
+//entire command is instead sent to the focused dbg_guv window. 
+typedef int got_line_fn(struct _dbg_guv *owner, char const *str);
 
 //A timonier may choose to occupy some of the lines inside of a dbg_guv 
 //window, and smart timoniers may use fewer lines if the window is smaller
@@ -32,14 +55,6 @@ typedef int cmd_receipt_fn(struct _dbg_guv *owner, unsigned const *receipt);
 //logs from a dbg_guv
 typedef int log_fn(struct _dbg_guv *owner, unsigned const *log);
 
-//Sometimes a manager needs to be triggered periodically. The fast_update
-//function, if provided, will be triggered once per iteration of the event
-//loop. The slow callback is triggered every 50 ms (incidentally, this is
-//performed right before the display is checked for redrawing)
-typedef int fast_update_fn(struct _dbg_guv *owner);
-typedef int slow_update_fn(struct _dbg_guv *owner);
-
-
 //Also allow a timonier the chance to clean itself up
 typedef void cleanup_mgr_fn(struct _dbg_guv *owner);
 
@@ -49,8 +64,6 @@ typedef struct _guv_operations {
     lines_req_fn *lines_req;
     cmd_receipt_fn *cmd_receipt;
     log_fn *log;
-    fast_update_fn *fast_update;
-    slow_update_fn *slow_update;
     draw_operations draw_ops;
     cleanup_mgr_fn *cleanup_mgr;
 } guv_operations;
@@ -130,28 +143,6 @@ typedef struct _fpga_connection_info {
     //Error information
     char const* error_str;
 } fpga_connection_info;
-
-typedef struct _new_fpga_cb_info {
-    //If a connection was succesfully opened, a pointer to the allocated
-    //fpga_connection_info is stored here.
-    fpga_connection_info *f;
-    
-    //Otherwise, ret is NULL and here is some error information
-    char const *error_str;
-    
-    //User can put whatever they want here
-    void *user_data;
-} new_fpga_cb_info;
-
-typedef void new_fpga_cb(new_fpga_cb_info info);
-
-//An "iterator" to a dbg_guv or an fpga_connection_info. If f is NULL, this
-//iterator is considered invalid. If addr is -1, this iterator is considered
-//to be pointing to the fpga_connection_info. 
-typedef struct _dbg_guv_it {
-    fpga_connection_info *f;
-    int addr;
-} dbg_guv_it;
 
 //Returns a newly allocated and constructed fpga_connection_info struct,
 //or NULL on error
