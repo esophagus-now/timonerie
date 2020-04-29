@@ -610,19 +610,14 @@ void got_rl_line(char *str) {
                 return;
             } 
             
-            int dbg_guv_addr = g->addr;
-            
             cursor_pos(1, term_rows-1);
             if (cmd.reg == LATCH) {
-                sprintf(line, "Committing values to guv[%d]" ERASE_TO_END "%n", 
-                    dbg_guv_addr,
-                    &len
-                );
+                sprintf(line, "Committing values to %s" ERASE_TO_END "%n", g->name, &len);
             } else {
-                sprintf(line, "Writing 0x%08x (%u) to guv[%d]::%s" ERASE_TO_END "%n", 
+                sprintf(line, "Writing 0x%08x (%u) to %s::%s" ERASE_TO_END "%n", 
                     cmd.param, 
                     cmd.param,
-                    dbg_guv_addr,
+                    g->name,
                     DBG_GUV_REG_NAMES[cmd.reg],
                     &len
                 );
@@ -652,15 +647,9 @@ void got_rl_line(char *str) {
             }
             
             //Actually send the command
-            unsigned cmd_addr = (dbg_guv_addr << 4) | cmd.reg;
-            fpga_connection_info *f = g->parent;
-			
-            int rc = fpga_enqueue_tx(f, (char*) &cmd_addr, sizeof(cmd_addr));
-            if (rc == 0 && cmd.has_param) {
-				rc = fpga_enqueue_tx(f, (char*) &cmd.param, sizeof(cmd.param));
-			}
+			int rc = dbg_guv_send_cmd(g, cmd.reg, cmd.param);
 			if (rc < 0) {
-				sprintf(line, "Could not enqueue command: %s", f->error_str);
+				sprintf(line, "Could not enqueue command: %s", g->parent->error_str);
 				msg_win_dynamic_append(err_log, line);
 			}
             break;

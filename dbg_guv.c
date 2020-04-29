@@ -164,6 +164,23 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 	return 0;
 }
 
+//TODO: remove hardcoded widths
+//Constructs a dbg_guv commadn and queues it for output by calling
+//fpga_enequeue_tx
+int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, unsigned param) {
+	fpga_connection_info *f = d->parent;
+	int dbg_guv_addr = d->addr;
+	#warning Remove hardcoded widths
+	unsigned cmd_addr = (dbg_guv_addr << 4) | reg;
+	
+	int rc = fpga_enqueue_tx(f, (char*) &cmd_addr, sizeof(cmd_addr));
+	if (rc == 0 && reg != LATCH) {
+		rc = fpga_enqueue_tx(f, (char*) &param, sizeof(param));
+	}
+	
+	return rc;
+}
+
 //TODO: runtime sizes for the stream?
 int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     if (f == NULL) {

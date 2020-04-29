@@ -106,6 +106,10 @@ typedef enum _fio_state_t {
 
 #define MAX_FIO_NAME_SZ 64
 #define FIO_BUF_SIZE 512
+#define FIO_LO_WMARK 32 //If output buffer goes below this level, the dbg_guv
+                        //is told to unpause
+#define FIO_HI_WMARK 384 //If output buffer goes above this level, the dbg_guv
+                         //is told to pause
 typedef struct _fio {
 	dbg_guv *owner;
 	
@@ -124,7 +128,7 @@ typedef struct _fio {
     char const *send_error_str;
     //Input buffer and read event
     char in_buf[FIO_BUF_SIZE];
-    int in_buf_pos;
+    int in_buf_pos, in_buf_len;
     struct event *file_rd_ev;
     
     //Output file
@@ -136,10 +140,6 @@ typedef struct _fio {
     //Output buffer and write event
     char out_buf[FIO_BUF_SIZE];
     int out_buf_pos, out_buf_len;
-    int lo_wmark; //If output buffer goes below this level, the dbg_guv
-                  //is told to unpause
-    int hi_wmark; //If output buffer goes above this level, the dbg_guv
-                  //is told to pause
     struct event *file_wr_ev;
 } fio;
 
@@ -147,7 +147,11 @@ typedef struct _fio {
 static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 	fio *f = arg;
 	
-	int rc = read(fd, f->in_buf, FIO_BUF_SIZE - f->in_buf_pos);
+	int rc = read(
+		fd, 
+		f->in_buf + f->in_buf_pos + f->in_buf_len, //Location of next free byte
+		FIO_BUF_SIZE - (f->in_buf_pos + f->in_buf_len) //Amount of room in buffer
+	);
 	if (rc < 0) {
 		f->send_state = FIO_ERROR;
 		f->send_error_str = strerror(errno);
@@ -155,7 +159,7 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 	} else if (rc == 0) {
 		//If we are at the end of the file, we expect our input buffer
 		//to be completely consumed. Make sure this is the case
-		if (f->in_buf_pos != 0) {
+		if (f->in_buf_len != 0) {
 			f->send_error_str = FIO_STRAGGLERS;
 			f->send_state = FIO_ERROR;
 			return;
@@ -165,7 +169,7 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 		return;
 	}
 	
-	f->in_buf_pos += rc;
+	f->in_buf_len += rc;
 	f->send_error_str = FIO_SUCCESS;
 	return;
 }
@@ -184,7 +188,13 @@ static int filename_from_path(char const *path, char *dest) {
 
 static void retry_inject(evutil_socket_t fd, short what, void *arg) {
 	fio *f = arg;
-	//TODO: write commit command
+	int rc = dbg_guv_send_cmd(f->owner, LATCH, 0);
+	if (rc < 0) {
+		//Should I do this?
+		f->send_error_str = f->owner->parent->error_str;
+	} else {
+		f->send_error_str = FIO_SUCCESS;
+	}
 }
 
 //Yes, this has the classic performance problem that we make a ton of
@@ -227,8 +237,36 @@ case FIO_IDLE: {
 	return 0;
 }
 
+//Kind of ugly... this state is only used to kick-strat the file-sending
+//loop, which is "self-sustained" by the WAIT_ACK state
 case FIO_SENDING: {
-	//TODO: write inject values from in_buf and commit 
+	#warning Remove hardcoded widths
+	#warning This only does TDATA, but not anything else
+	
+	//Check if there are enough bytes in the input buffer
+	if (f->in_buf_pos < 4) {
+		f->send_state = FIO_ERROR;
+		f->send_error_str = FIO_TOO_FEW_BYTES;
+		return -1;
+	}
+	
+	//Get the inject data out of the input buffer
+	unsigned tdata = *(unsigned*)(f->in_buf + f->in_buf_pos);
+	f->in_buf_pos += 4;
+	
+	//Send the inject and latch commands
+	int rc = dbg_guv_send_cmd(f->owner, INJ_TDATA, tdata);
+	if (rc == 0) {
+		rc = dbg_guv_send_cmd(f->owner, LATCH, 0);
+	}
+	
+	if (rc < 0) {
+		//Is this really necessary?
+		f->send_error_str = f->owner->parent->error_str;
+		f->send_state = FIO_ERROR;
+		return -1;
+	}
+	
 	f->send_state = FIO_WAIT_ACK;
 	f->send_retries = 0; //Reset retry counter
 	//The next time sendfile_fsm is called is from within fio_cmd_receipt
@@ -259,10 +297,16 @@ case FIO_WAIT_ACK: {
 		f->send_error_str = FIO_SUCCESS;
 		return 0;
 	} else {
+		//Reset retry counter given succesful inject
+		f->send_retries = 0;
 		#warning Change this to use runtime size parameters
-		//If we don't have enough data in the read buffer, schedul a new
+		//If we don't have enough data in the read buffer, schedule a new
 		//read event and wait for it
-		if (f->in_buf_pos < 8) {
+		if (f->in_buf_len < 4) {
+			//Shift down any partial messages to beginning of buffer
+			memmove(f->in_buf, f->in_buf + f->in_buf_pos, f->in_buf_len);
+			
+			//Schedule a read event to fill free space in the buffer
 			#warning Error code is not checked
 			event_add(f->file_rd_ev, NULL);
 			//The next time this function is called is from within the read event handler
@@ -271,7 +315,22 @@ case FIO_WAIT_ACK: {
 			return 0;
 		} else {
 			//Send the next flit and wait for it
-			//TODO: write inject values from in_buf and commit 
+			//Get the inject data out of the input buffer
+			unsigned tdata = *(unsigned*)(f->in_buf + f->in_buf_pos);
+			f->in_buf_pos += 4;
+			
+			//Send the inject and latch commands
+			int rc = dbg_guv_send_cmd(f->owner, INJ_TDATA, tdata);
+			if (rc == 0) {
+				rc = dbg_guv_send_cmd(f->owner, LATCH, 0);
+			}
+			
+			if (rc < 0) {
+				//Is this really necessary?
+				f->send_error_str = f->owner->parent->error_str;
+				f->send_state = FIO_ERROR;
+				return -1;
+			}
 			//f->send_state = FIO_WAIT_ACK; //Only written to remind me that this state loops back on itself
 			f->send_error_str = FIO_SUCCESS;
 			return 0;
@@ -295,14 +354,21 @@ default: {
 }
 
 static int init_fio(dbg_guv *owner) {
+	//Takes care of buffer positions/lengths
     fio *mgr = calloc(1, sizeof(fio));
     
-    if (!mgr) return -1; //TODO: error codes
+    if (!mgr) {
+		owner->error_str = FIO_OOM;
+		return -1;
+	}
+    
+    //Keep handle to owning dbg_guv
+    mgr->owner = owner;
     
     mgr->send_state = FIO_NOFILE;
     mgr->log_state = FIO_NOFILE;
     
-    //TODO: hook up event for writing to file
+    //Note to self: remember to hook up libevent stuff in open file command
     
     owner->mgr = mgr;
     return 0;
@@ -462,3 +528,5 @@ char const * const FIO_INJ_TIMEOUT = "inject timeout";
 char const * const FIO_WOKE_EARLY = "got an unexpected event while paused";
 char const * const FIO_IMPOSSIBLE = "code reached a location that Marco thought was impossible";
 char const * const FIO_STRAGGLERS = "got EOF, but partial message leftover";
+char const * const FIO_TOO_FEW_BYTES = "got EOF, but not enough bytes for complete message";
+char const * const FIO_OOM = "out of memory";

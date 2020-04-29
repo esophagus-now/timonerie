@@ -20,5 +20,7 @@ extern char const * const FIO_INJ_TIMEOUT;// = "inject timeout";
 extern char const * const FIO_WOKE_EARLY;// = "got an unexpected event while paused";
 extern char const * const FIO_IMPOSSIBLE;// = "code reached a location that Marco thought was impossible";
 extern char const * const FIO_STRAGGLERS;// = "got EOF, but partial message leftover";
+extern char const * const FIO_TOO_FEW_BYTES;// = "got EOF, but not enough bytes for complete message";
+extern char const * const FIO_OOM;// = "out of memory";
 
 #endif

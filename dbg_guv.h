@@ -163,6 +163,11 @@ char *append_log(dbg_guv *d, char *log);
 //(Returns -2 if f was NULL)
 int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len);
 
+//TODO: remove hardcoded widths
+//Constructs a dbg_guv commadn and queues it for output by calling
+//fpga_enequeue_tx
+int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, unsigned param);
+
 //TODO: runtime sizes for the stream
 int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
 
