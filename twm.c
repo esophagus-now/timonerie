@@ -1631,8 +1631,8 @@ void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn) {
 //sometimes. Anyway, it'll be worth single-stepping this sucker in gdb, or
 //maybe rewriting it in terms of my other functions which seem to be working
 //alright
-#warning This function does not set tree->focus, which causes problems if you delete the focused node
 static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
+	#warning This function has significant code stink. Really need to clean this up
     if (tree == NULL) {
         return -2; //This is all we can do
     }
@@ -1643,7 +1643,7 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
     }
     
     if (t->type == TWM_LEAF) {
-        if (t->item == item) {
+        if (t->item == item) {			
             //Delete this node. For reasons I won't get into, to do that we must
             //find its parent
             twm_node *parent = t->parent;
@@ -1718,6 +1718,7 @@ int twm_tree_remove_item(twm_tree *t, void *item) {
         return twm_tree_remove_focused(t);
     }
     
+    //Run our recursive function that searches and destroys
     int rc = twm_tree_node_remove_item(t, t->head, item);
     
     if (rc == 0) {
