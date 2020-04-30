@@ -22,5 +22,7 @@ extern char const * const FIO_IMPOSSIBLE;// = "code reached a location that Marc
 extern char const * const FIO_STRAGGLERS;// = "got EOF, but partial message leftover";
 extern char const * const FIO_TOO_FEW_BYTES;// = "got EOF, but not enough bytes for complete message";
 extern char const * const FIO_OOM;// = "out of memory";
+extern char const * const FIO_BAD_CMD;// = "no such command";
+extern char const * const FIO_NULL_ARG;// = "NULL argument";
 
 #endif

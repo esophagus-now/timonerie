@@ -271,6 +271,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
 
 //Tries to write as much of f->out_buf as possible to the socket. This 
 //is non-blocking. Follows usual error return values
+//TODO: convert to writev when I get the chance
 int write_fpga_connection(fpga_connection_info *f, int fd) {
     if (f == NULL) {
         return -2; //This is all we can do

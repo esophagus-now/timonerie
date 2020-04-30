@@ -43,11 +43,12 @@ int skip_whitespace(dbg_cmd *dest, char const *str) {
 //byte of space for the NUL character. Returns the number of characters read
 //on success or -1 on error
 int parse_strn(char *buf, int n, char const *str) {
+	//Sanity check inputs
+	if (buf == NULL || n <= 0 || str == NULL) return -1;
     int num_read;
-    int rc = sscanf(str, "%" stringify(MAX_STR_PARAM_SIZE) "s%n", 
-        buf,
-        &num_read
-    );
+    char format_str[80];
+    sprintf(format_str, "%%%ds%%n", n-1); //The minus one is to make spoace for the NUL
+    int rc = sscanf(str, format_str, buf, &num_read);
     
     if (rc != 1) {
         return -1;

@@ -371,6 +371,7 @@ void got_rl_line(char *str) {
             cursor_pos(1, term_rows-1);
             sprintf(line, "Parse error: %s" ERASE_TO_END "%n", cmd.error_str, &len);
             write(1, line, len);
+            free(str);
             return;
         }
         
@@ -486,7 +487,7 @@ void got_rl_line(char *str) {
                 cursor_pos(1, term_rows-1);
                 sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
-                return;
+                break;
             } 
             
             //TODO (maybe): this just checks a hardcoded list of options.
@@ -523,7 +524,7 @@ void got_rl_line(char *str) {
                 cursor_pos(1, term_rows-1);
                 sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
-                return;
+                break;
             } 
             
             symtab_entry *e = symtab_lookup(ids, cmd.id);
@@ -595,7 +596,7 @@ void got_rl_line(char *str) {
             if (dummy_col == 47) dummy_col = 40;
             d->need_redraw = 1;
             twm_tree_add_window(t, d, dummy_ops);
-            return;
+            break;
         }
         case CMD_QUIT: {
             //end libevent event loop
@@ -607,7 +608,7 @@ void got_rl_line(char *str) {
                 cursor_pos(1, term_rows-1);
                 sprintf(line, "This is not a dbg_guv" ERASE_TO_END "%n", &len);
                 write(1, line, len);
-                return;
+                break;
             } 
             
             cursor_pos(1, term_rows-1);
@@ -656,13 +657,13 @@ void got_rl_line(char *str) {
         }
         case CMD_HANDLED: {
 			//Nothing to do
-			return;
+			break;
 		}
         default: {
             cursor_pos(1, term_rows-1);
             sprintf(line, "Received a %s command" ERASE_TO_END "%n", DBG_CMD_NAMES[cmd.type], &len);
             write(1, line, len);
-            return;
+            break;
         }
         }
     }
@@ -710,18 +711,26 @@ int main(int argc, char **argv) {
     //Main event loop
     event_base_dispatch(ev_base);
     
+    //At this point, main event loop is done. Clear all resources.
+    deinit_readline();
+    
+    //Get to work freeing the memory for all these events. This is to
+    //declutter valgrind's output and make it easier for me to fix other
+    //issues
+    event_free(draw_ev);
+    event_free(input_ev);
     
     //Close any open FPGA connections. Technically we don't have to do this,
     //since Linux will do it anwyay. 
     fci_list *f = fci_head.next;
     while (f != &fci_head) {
         fci_list *next = f->next;
-        del_fpga_connection(f->f);
-        free(f);
+        cleanup_fpga_connection(f->f); //Also frees f
         f = next;
     }
     
     //Make sure we don't confuse valgrind
+    event_base_free(ev_base);
     libevent_global_shutdown();
     
     //Just keep clearing things up. Unnecessary, but it separates the chaff
@@ -782,8 +791,11 @@ int get_nb_sock(char const *node, char const *serv, char const* *error_str) {
 }
 
 void cleanup_fpga_connection(fpga_connection_info *f) {
-    event_del(f->rd_ev);
-    event_del(f->wr_ev);
+	//TODO? Should events be freed by del_fpga_connection?
+	//So far, my answer has been no because they are not created by
+	//new_fpga_connection
+    event_free(f->rd_ev);
+    event_free(f->wr_ev);
     
     int i;
     for (i = 0; i < MAX_GUVS_PER_FPGA; i++) {

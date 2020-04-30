@@ -1631,6 +1631,7 @@ void *twm_tree_get_focused_as(twm_tree *t, draw_fn_t *draw_fn) {
 //sometimes. Anyway, it'll be worth single-stepping this sucker in gdb, or
 //maybe rewriting it in terms of my other functions which seem to be working
 //alright
+#warning This function does not set tree->focus, which causes problems if you delete the focused node
 static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
     if (tree == NULL) {
         return -2; //This is all we can do

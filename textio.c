@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <readline/readline.h>
+#include <readline/history.h>
 #include <string.h> //For strncpy
 #include <signal.h> //To get access to SIGWINCH
 #include <unistd.h> //isatty
@@ -226,6 +227,13 @@ int init_readline(readline_callback cb) {
 
 void deinit_readline(void) {
     rl_callback_handler_remove();
+    //Oddly, it's difficult to find readline functions for freeing memory
+    //See, readline (correctly) figures that the memory will be cleaned
+    //up when a process is exited. However, I'm trying to get rid of
+    //all memory so that I can understand valgrind output and make sure
+    //that my own code does not have leaks
+    clear_history();
+    
 }
 
 

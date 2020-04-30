@@ -153,7 +153,7 @@ typedef enum _fio_state_t {
     FIO_ERROR
 } fio_file_state_t;
 
-#define MAX_FIO_NAME_SZ 64
+#define MAX_FIO_NAME_SZ 63
 #define FIO_BUF_SIZE 512
 #define FIO_LO_WMARK 32 //If output buffer goes below this level, the dbg_guv
                         //is told to unpause
@@ -223,8 +223,9 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 	return;
 }
 
-/*
 static int filename_from_path(char const *path, char *dest) {
+	if (path == NULL || dest == NULL) return -1;
+	
     int slash_ind = 0;
     int i;
     for (i = 0; path[i]; i++) {
@@ -232,8 +233,9 @@ static int filename_from_path(char const *path, char *dest) {
     }
     if (i - slash_ind <= 1) return -1;
     strncpy(dest, path + slash_ind + 1, MAX_FIO_NAME_SZ);
+    
+    return 0;
 }
-*/
 
 static void retry_inject(evutil_socket_t fd, short what, void *arg) {
 	fio *f = arg;
@@ -349,6 +351,8 @@ case FIO_WAIT_ACK: {
 		//Reset retry counter given succesful inject
 		f->send_retries = 0;
 		#warning Change this to use runtime size parameters
+		f->send_bytes += 4;
+		
 		//If we don't have enough data in the read buffer, schedule a new
 		//read event and wait for it
 		if (f->in_buf_len < 4) {
@@ -423,15 +427,103 @@ static int init_fio(dbg_guv *owner) {
     return 0;
 }
 
-//File I/O got_line function
+typedef enum _fio_cmd {
+	FIO_TXFILE,
+	FIO_RXFILE,
+	FIO_LOGON,
+	FIO_LOGOFF,
+	FIO_SEND,
+	FIO_PAUSE,
+	FIO_CONT,
+	FIO_NUM_CMDS,
+} fio_cmd;
+
+static struct {char const * const str; fio_cmd cmd;} const fio_cmd_map[] = {
+	{"txfile", FIO_TXFILE},
+	{"rxfile", FIO_RXFILE},
+	{"logon", FIO_LOGON},
+	{"logoff", FIO_LOGOFF},
+	{"send", FIO_SEND},
+	{"pause", FIO_PAUSE},
+	{"cont", FIO_CONT},
+};
+
+//File I/O command parser
 static int got_line_fio(dbg_guv *owner, char const *str) {
+	//Sanity check inputs
+	if (owner == NULL) {
+		return -2; //This is all we can do
+	}
+	
+	if (str == NULL) {
+		owner->error_str = FIO_NULL_ARG;
+		return -1;
+	}
+	
+	//Get the command
+	char cmd[16];
+	int rc = parse_strn(cmd, sizeof(cmd), str);
+	if (rc < 0) {
+		owner->error_str = FIO_BAD_CMD;
+		return -1;
+	}
+	
+	//Increment past command string
+	str += rc;
+	
+	int i;
+	fio_cmd cmd_id = FIO_NUM_CMDS;
+	//Look through map of strings to command IDs. Slow linear search,
+	//but who cares?
+	for (i = 0; i < sizeof(fio_cmd_map)/sizeof(*fio_cmd_map); i++) {
+		if (!strcmp(fio_cmd_map[i].str, cmd)) {
+			cmd_id = fio_cmd_map[i].cmd;
+			break;
+		}
+	}
+	
+	//Check if we found a command
+	if (cmd_id == FIO_NUM_CMDS) {
+		owner->error_str = FIO_BAD_CMD;
+		return -1;
+	}
+	
+	dbg_cmd dummy;
+	//TODO: get rid of this need for the first parameter to skip_whitespace
+	int incr = skip_whitespace(&dummy, str);
+	str += incr;
+	
+	switch(cmd_id) {
+	case FIO_TXFILE: {
+		
+	} 
+	case FIO_RXFILE: {
+		
+	}
+	case FIO_LOGON: {
+		
+	}
+	case FIO_LOGOFF: {
+		
+	}
+	case FIO_SEND: {
+		
+	}
+	case FIO_PAUSE: {
+		
+	}
+	case FIO_CONT: {
+		
+	}
+	default: {
+		owner->error_str = FIO_IMPOSSIBLE;
+		return -1;
+	}
+	}
+	
     //TEMPORARY: defer to regular commands just for the sake of incremental
     //testing
-	dbg_cmd cmd;
-    int rc = parse_dbg_reg_cmd(&cmd, str);
-    //TODO actually send values
-    
-    return rc;
+	return got_line_inter(owner, str);
 }
 
 static int lines_req_fio(dbg_guv *owner, int w, int h) {
@@ -579,3 +671,5 @@ char const * const FIO_IMPOSSIBLE = "code reached a location that Marco thought 
 char const * const FIO_STRAGGLERS = "got EOF, but partial message leftover";
 char const * const FIO_TOO_FEW_BYTES = "got EOF, but not enough bytes for complete message";
 char const * const FIO_OOM = "out of memory";
+char const * const FIO_BAD_CMD = "no such command";
+char const * const FIO_NULL_ARG = "NULL argument";
