@@ -413,6 +413,7 @@ static int sendfile_fsm(fio *f) {
                     //Get the inject data out of the input buffer
                     unsigned tdata = *(unsigned*)(f->in_buf + f->in_buf_pos);
                     f->in_buf_pos += 4;
+                    f->in_buf_len -= 4;
                     
                     //Send the inject and latch commands
                     int rc = dbg_guv_send_cmd(f->owner, INJ_TDATA, tdata);
