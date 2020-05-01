@@ -237,7 +237,9 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 		f->send_state = FIO_DONE;
 		f->send_error_str = FIO_SUCCESS;
 		return;
-	}
+	} else {
+        f->in_buf_len += rc;
+    }
 	
 	#warning Remove hardcoded widths
 	#warning This only does TDATA and TVALID, but not anything else
@@ -251,7 +253,7 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 		f->send_error_str = FIO_SUCCESS;
 		return;
 	}
-	
+    
 	//Get the inject data out of the input buffer
 	unsigned tdata = *(unsigned*)(f->in_buf + f->in_buf_pos);
 	f->in_buf_pos += 4;
@@ -291,7 +293,7 @@ static int filename_from_path(char const *path, char *dest) {
         if (path[i] == '/') slash_ind = i;
     }
     if (i - slash_ind <= 1) return -1;
-    strncpy(dest, path + slash_ind + 1, MAX_FIO_NAME_SZ);
+    strncpy(dest, path + slash_ind + (path[slash_ind] == '/'), MAX_FIO_NAME_SZ);
     
     return 0;
 }
@@ -377,6 +379,7 @@ static int sendfile_fsm(fio *f) {
                 f->send_retries = 0;
                 #warning Change this to use runtime size parameters
                 f->send_bytes += 4;
+                f->owner->need_redraw = 1;
                 
                 //If we don't have enough data in the read buffer, schedule a new
                 //read event and wait for it
@@ -559,6 +562,7 @@ static int got_line_fio(dbg_guv *owner, char const *str) {
         filename_from_path(str, f->send_file);
         
         f->send_state = FIO_IDLE;
+        f->owner->need_redraw = 1;
         return 0;
 	} 
 	case FIO_RXFILE: {
@@ -575,12 +579,14 @@ static int got_line_fio(dbg_guv *owner, char const *str) {
 	}
 	case FIO_SEND: {
 		if (f->send_state != FIO_IDLE) {
-            owner->error_str = FIO_ALREADY_SENDING;
+            owner->error_str = FIO_BAD_STATE;
             return -1;
         }
         
         //Give the okay to start sending
         sendfile_fsm(f);
+        
+        f->owner->need_redraw = 1;
         return 0;
 	}
 	case FIO_PAUSE: {
