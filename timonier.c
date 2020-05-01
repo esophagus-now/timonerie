@@ -167,7 +167,7 @@ typedef struct _fio {
 	
     //Input file
     fio_file_state_t send_state;
-    fio_file_state_t __old_send_state; //Used by the FSM for resuming after pause
+    void* __resume_pos; //Used by the FSM for resuming after pause
     int send_retries; //If an inject fails, we try again after 5 ms, 
                       //then 50 ms, then 5000 ms. If the inject still
                       //hasn't succeeded, then we error out
@@ -188,6 +188,8 @@ typedef struct _fio {
     char log_file[MAX_FIO_NAME_SZ+1];
     int log_latch_needed; //Ugly kludge: if both sending and logging are on,
                           //we need to manage LATCH commands
+    int log_latch_sent; //The logging logic may add its own latch signal, 
+                        //which needs to be ignored
     int log_fd;
     int log_numsaved;
     char const *log_error_str;
@@ -313,25 +315,6 @@ static void retry_inject(evutil_socket_t fd, short what, void *arg) {
 //small read() system calls... but who cares?
 //Returns 0 on success, -1 on error, setting f->send_error_str if possible
 static int sendfile_fsm(fio *f) {
-    //This pausing logic is ALL WRONG!!!!!!
-	if(f->send_pause) {
-		if (f->send_state == FIO_PAUSED) {
-			//The function was called before unpausing. I treat this as
-			//an error
-			f->send_state = FIO_ERROR;
-			f->send_error_str = FIO_WOKE_EARLY;
-			return -1;
-		}
-		//Save where we currently are so we can come back later
-		f->__old_send_state = f->send_state;
-		f->send_state = FIO_PAUSED;
-		f->send_error_str = FIO_SUCCESS;
-		return 0;
-	} else if (f->send_state == FIO_PAUSED) {
-		//Pick up where we left off
-		f->send_state = f->__old_send_state;
-	}
-
     //This code got real spaghettified, but ¯\_(ツ)_/¯
     switch (f->send_state) {
         case FIO_NOFILE: {
@@ -340,6 +323,14 @@ static int sendfile_fsm(fio *f) {
         }
 
         case FIO_IDLE: {
+            //Check for a pause signal
+            if (f->send_pause) {
+                f->send_state = FIO_PAUSED;
+                f->send_error_str = FIO_SUCCESS;
+                f->__resume_pos = &&schedule_read;
+                return 0;
+            }
+            schedule_read:;
             //User has opened the file and wishes to send it
             #warning Error code is not checked
             event_add(f->file_rd_ev, NULL);
@@ -355,12 +346,40 @@ static int sendfile_fsm(fio *f) {
         case FIO_WAIT_ACK: {
             //Check if inject failed
             if(f->owner->inj_failed) {
+                //Sepcial case: retry right away if the logging logic needs
+                //a latch to be sent. We won't worry about counting this as
+                //a retry
+                if (f->log_latch_needed) {
+                    int rc = dbg_guv_send_cmd(f->owner, LATCH, 0);			
+                    if (rc < 0) {
+                        //Is this really necessary?
+                        f->send_error_str = f->owner->parent->error_str;
+                        f->send_state = FIO_ERROR;
+                        return -1;
+                    }
+                    f->log_latch_needed = 0;
+                    f->send_state = FIO_WAIT_ACK;
+                    f->send_error_str = FIO_SUCCESS;
+                    return 0; 
+                }
+                
+                //Check for a pause signal
+                if (f->send_pause) {
+                    f->send_state = FIO_PAUSED;
+                    f->send_error_str = FIO_SUCCESS;
+                    f->__resume_pos = &&schedule_retry_inject;
+                    return 0;
+                }
+                
+                schedule_retry_inject:;
+                
                 //Too many retries. Fail with an error
                 if (f->send_retries > 2) {
                     f->send_error_str = FIO_INJ_TIMEOUT;
                     f->send_state = FIO_ERROR;
                     return -1;
                 }
+                
                 //Wait 5 ms on first retry, 50 ms on second, 2 sec on third
                 struct timeval dly = {
                     .tv_sec = (f->send_retries == 2) ? 2 : 0,
@@ -368,33 +387,39 @@ static int sendfile_fsm(fio *f) {
                 };
                 f->send_retries++;
                 
-                //Schedule retry_commit after the calculated delay
+                //Schedule retry_inject after the calculated delay
                 #warning Return value not checked
                 struct event_base *eb = event_get_base(f->file_rd_ev);
                 event_base_once(eb, -1, EV_TIMEOUT, retry_inject, f, &dly);
                 f->send_error_str = FIO_SUCCESS;
                 return 0;
             } else {
-                //Reset retry counter given succesful inject
+                //Reset retry counter, since this was a succesful inject
                 f->send_retries = 0;
                 #warning Change this to use runtime size parameters
                 f->send_bytes += 4;
                 f->owner->need_redraw = 1;
                 
-                //If we don't have enough data in the read buffer, schedule a new
-                //read event and wait for it
+                //If we don't have enough data in the read buffer, schedule
+                //a new read event and wait for it
                 if (f->in_buf_len < 4) {
                     //Shift down any partial messages to beginning of buffer
                     memmove(f->in_buf, f->in_buf + f->in_buf_pos, f->in_buf_len);
                     
-                    //Schedule a read event to fill free space in the buffer
-                    #warning Error code is not checked
-                    event_add(f->file_rd_ev, NULL);
-                    
-                    //Because we might wait an unbounded amount of time for a read,
-                    //trigger a latch if one is needed
+                    //Because we might wait an unbounded amount of time for 
+                    //a read, trigger a latch if one is needed
                     if (f->log_latch_needed) {
-                        int rc = dbg_guv_send_cmd(f->owner, LATCH, 0);			
+                        //Don't accidentally send a double flit
+                        int rc = dbg_guv_send_cmd(f->owner, INJ_TVALID, 0);
+                        if (rc == 0) {
+                            rc = dbg_guv_send_cmd(f->owner, LATCH, 0);
+                        }
+                        if (rc == 0) {
+                            //But yeah turn TVALID back on since the send 
+                            //logic expects it
+                            rc = dbg_guv_send_cmd(f->owner, INJ_TVALID, 1);
+                        }
+                        
                         if (rc < 0) {
                             //Is this really necessary?
                             f->send_error_str = f->owner->parent->error_str;
@@ -403,6 +428,19 @@ static int sendfile_fsm(fio *f) {
                         }
                         f->log_latch_needed = 0;
                     }
+                    
+                    //Check for a pause signal
+                    if (f->send_pause) {
+                        f->send_state = FIO_PAUSED;
+                        f->send_error_str = FIO_SUCCESS;
+                        f->__resume_pos = &&schedule_buffer_topup;
+                        return 0;
+                    }
+                    schedule_buffer_topup:;
+                    
+                    //Schedule a read event to fill free space in the buffer
+                    #warning Error code is not checked
+                    event_add(f->file_rd_ev, NULL);
                     
                     //The next time this function is called is from within the read event handler
                     f->send_state = FIO_WAIT_READ;
@@ -414,6 +452,40 @@ static int sendfile_fsm(fio *f) {
                     unsigned tdata = *(unsigned*)(f->in_buf + f->in_buf_pos);
                     f->in_buf_pos += 4;
                     f->in_buf_len -= 4;
+                    
+                    //Ugly: check for a pause signal, sending a latch if
+                    //one was requested
+                    if (f->send_pause) {
+                        //We're going to pause for an unknown amount of time.
+                        //Make sure we send a latch signal if the logging
+                        //logic asked for it.
+                        if (f->log_latch_needed) {
+                            //Don't accidentally send a double flit
+                            int rc = dbg_guv_send_cmd(f->owner, INJ_TVALID, 0);
+                            if (rc == 0) {
+                                rc = dbg_guv_send_cmd(f->owner, LATCH, 0);
+                            }
+                            if (rc == 0) {
+                                //But yeah turn TVALID back on since the send 
+                                //logic expects it
+                                rc = dbg_guv_send_cmd(f->owner, INJ_TVALID, 1);
+                            }
+                            
+                            if (rc < 0) {
+                                //Is this really necessary?
+                                f->send_error_str = f->owner->parent->error_str;
+                                f->send_state = FIO_ERROR;
+                                return -1;
+                            }
+                            f->log_latch_needed = 0;
+                        }
+                        f->__resume_pos = &&send_next_inject;
+                        f->send_state = FIO_PAUSED;
+                        f->send_error_str = FIO_SUCCESS;
+                        return 0;
+                    }
+                    
+                    send_next_inject:;
                     
                     //Send the inject and latch commands
                     int rc = dbg_guv_send_cmd(f->owner, INJ_TDATA, tdata);
@@ -431,13 +503,21 @@ static int sendfile_fsm(fio *f) {
                     //A latch was sent
                     f->log_latch_needed = 0;
                     
-                    //f->send_state = FIO_WAIT_ACK; //Only written to remind me that this state loops back on itself
+                    f->send_state = FIO_WAIT_ACK;
                     f->send_error_str = FIO_SUCCESS;
                     return 0;
                 }
             }
         }
-
+        
+        case FIO_PAUSED: {
+            if (f->send_pause == 0) {
+                goto *f->__resume_pos;
+            } else {
+                return 0;
+            }
+        }
+        
         default: {
             //We want to signal an error if we get a trigger, but it's possible
             //we'd clobber an old error string which might be useful for the user
@@ -591,12 +671,14 @@ static int got_line_fio(dbg_guv *owner, char const *str) {
         return 0;
 	}
 	case FIO_PAUSE: {
-		owner->error_str = FIO_BAD_DEVELOPER;
-        return -1;
+		f->send_pause = 1;
+        f->owner->need_redraw = 1;
+        return 0;
 	}
 	case FIO_CONT: {
-		owner->error_str = FIO_BAD_DEVELOPER;
-        return -1;
+		f->send_pause = 0;
+        f->owner->need_redraw = 1;
+        return sendfile_fsm(f);
 	}
 	default: {
 		owner->error_str = FIO_IMPOSSIBLE;
@@ -611,6 +693,14 @@ static int lines_req_fio(dbg_guv *owner, int w, int h) {
 
 static int cmd_receipt_fio(dbg_guv *owner, unsigned const *receipt) {
     fio *f = owner->mgr;
+    
+    //Very ugly hack; if logging logic inserts its own latch signal, then
+    //we need to drop the receipt that it generated
+    if (f->log_latch_sent) {
+        f->log_latch_sent = 0;
+        return 0;
+    }
+    
     if (f->send_state == FIO_WAIT_ACK)
         return sendfile_fsm(f);
     else

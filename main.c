@@ -695,7 +695,13 @@ int main(int argc, char **argv) {
     
     //Set up libevent. I ended up just making the base a global; it was a 
     //lot easier that way
-    ev_base = event_base_new();
+    //Ugly problem: for some reason, epoll does not support regular files
+    //(why????) so tell libevent to not use epoll
+    struct event_config *cfg = event_config_new();
+    event_config_avoid_method(cfg, "epoll");
+    
+    ev_base = event_base_new_with_config(cfg);
+    event_config_free(cfg);
     
     //Event for stdin
     struct event *input_ev = event_new(ev_base, STDIN_FILENO, EV_READ | EV_PERSIST, handle_stdin_cb, ev_base);
