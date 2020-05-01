@@ -24,5 +24,8 @@ extern char const * const FIO_TOO_FEW_BYTES;// = "got EOF, but not enough bytes 
 extern char const * const FIO_OOM;// = "out of memory";
 extern char const * const FIO_BAD_CMD;// = "no such command";
 extern char const * const FIO_NULL_ARG;// = "NULL argument";
+extern char const * const FIO_BAD_STATE;// = "unexpected signal";
+extern char const * const FIO_BAD_DEVELOPER;// = "not implemented";
+extern char const * const FIO_ALREADY_SENDING;// = "already sending";
 
 #endif
