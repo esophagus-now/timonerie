@@ -27,5 +27,7 @@ extern char const * const FIO_NULL_ARG;// = "NULL argument";
 extern char const * const FIO_BAD_STATE;// = "unexpected signal";
 extern char const * const FIO_BAD_DEVELOPER;// = "not implemented";
 extern char const * const FIO_ALREADY_SENDING;// = "already sending";
+extern char const * const FIO_CARPET_PULLED;// = "logfile unexpectedly closed";
+extern char const * const FIO_OVERFLOW;// = "logfile buffer overflowed";
 
 #endif

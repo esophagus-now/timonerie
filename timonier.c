@@ -286,6 +286,59 @@ static void fio_file_rd_ev(evutil_socket_t fd, short what, void *arg) {
 	return;
 }
 
+//Handles event to write to logfile
+//TODO: change to writev when I get the chance
+static void fio_file_wr_ev(evutil_socket_t fd, short what, void *arg) {
+    fio *f = arg;
+    
+    //See how any contiguous bytes we can use from the circular buffer
+    int contig = f->out_buf_len;
+    if (f->out_buf_pos + f->out_buf_len > FCI_BUF_SIZE) {
+		contig = FIO_BUF_SIZE - f->out_buf_pos;
+	}
+	
+	int rc = write(fd, f->out_buf + f->out_buf_pos, contig);
+	if (rc < 0) {
+		//Check if this is an error we should signal to the user
+		if (rc != EAGAIN && rc != EWOULDBLOCK) {
+            f->log_state = FIO_ERROR;
+			f->log_error_str = strerror(errno);
+			return;
+		}
+		
+		//Technically, this should never happen, since in theory this
+		//function is only called once libevent determines that the 
+		//socket is writable. But we'll deal with this case anyway, with
+		//the caveat that we'll set the error string to IMPOSSIBLE
+		f->log_error_str = FIO_IMPOSSIBLE;
+		return; //Nothing to do, but not an error
+	} else if (rc == 0) {
+        f->log_state = FIO_ERROR;
+		f->log_error_str = FIO_CARPET_PULLED;
+		return;
+	}
+	
+	//Update the position/length in the circular buffer
+	f->out_buf_len -= rc;
+	if (f->out_buf_len == 0) {
+		//Special case: since I don't a priori constrain the size of
+		//data appended into the output buffer, take this chance when
+		//the buffer is empty to move the position to the start. This
+		//minimizes some straddling.
+		f->out_buf_pos = 0;
+	} else {
+		f->out_buf_pos += rc;
+		f->out_buf_pos %= FIO_BUF_SIZE;
+		//Also, we need to reschedule the write event given that there
+		//is still data to send
+		#warning Error code not checked
+		event_add(f->file_wr_ev, NULL);
+	}
+    
+	f->log_error_str = FIO_SUCCESS;
+	return;
+}
+
 static int filename_from_path(char const *path, char *dest) {
 	if (path == NULL || dest == NULL) return -1;
 	
@@ -676,8 +729,10 @@ static int got_line_fio(dbg_guv *owner, char const *str) {
         return 0;
 	}
 	case FIO_CONT: {
-		f->send_pause = 0;
-        f->owner->need_redraw = 1;
+        if (f->send_pause) {
+            f->send_pause = 0;
+            f->owner->need_redraw = 1;
+        }
         return sendfile_fsm(f);
 	}
 	default: {
@@ -705,6 +760,52 @@ static int cmd_receipt_fio(dbg_guv *owner, unsigned const *receipt) {
         return sendfile_fsm(f);
     else
         return 0;
+}
+
+static int log_fio(dbg_guv *owner, unsigned const *log) {
+    fio *f = owner->mgr;
+    
+    //Don't do anything if we're not logging
+    if (f->log_state != FIO_LOGGING) {
+        return 0;
+    }
+	
+    #warning Get rid of hardcoded widths
+	if(FIO_BUF_SIZE - f->out_buf_len < 8) {
+        f->log_state = FIO_ERROR;
+		f->log_error_str = FIO_OVERFLOW;
+		return -1;
+	}
+	
+    //See explanatory comments in fpga_enqueue_tx. Technically, I should 
+    //have made a general function that I could have called, but whatever
+    //this was easier
+    
+	int wr_pos = (f->out_buf_pos + f->out_buf_len) % FIO_BUF_SIZE;
+	if (wr_pos + 8 > FIO_BUF_SIZE) {
+		//Case 2: need to split into first and second halves
+		int first_half_len = FCI_BUF_SIZE - wr_pos - 1; //OBOE?
+		memcpy(f->out_buf + wr_pos, log, first_half_len);
+		
+		int second_half_len = 8 - first_half_len;
+		memcpy(f->out_buf + 0, log + first_half_len, second_half_len);
+		
+	} else {
+		//Case 1 or case 3: we can just directly copy in
+		memcpy(f->out_buf + wr_pos, log, 8);
+	}
+	
+	f->out_buf_len += 8;
+    
+    //Check if we went past our high watermark
+    if (f->out_buf_len > FIO_HI_WMARK) {
+        //TODO: finish this
+    }
+    
+	f->log_error_str = FIO_SUCCESS;
+	#warning Error code not checked
+	event_add(f->file_wr_ev, NULL); //Now that there is data to send, send it!
+	return 0;
 }
 
 //Draws item. Returns number of bytes added into buf, or -1 on error.
@@ -864,3 +965,4 @@ char const * const FIO_NULL_ARG = "NULL argument";
 char const * const FIO_BAD_STATE = "unexpected signal";
 char const * const FIO_BAD_DEVELOPER = "not implemented";
 char const * const FIO_ALREADY_SENDING = "already sending";
+char const * const FIO_CARPET_PULLED = "logfile unexpectedly closed";
