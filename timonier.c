@@ -696,20 +696,59 @@ static int got_line_fio(dbg_guv *owner, char const *str) {
         filename_from_path(str, f->send_file);
         
         f->send_state = FIO_IDLE;
+        f->send_bytes = 0; //Reset sent bytes counter
         f->owner->need_redraw = 1;
         return 0;
 	} 
 	case FIO_RXFILE: {
-		owner->error_str = FIO_BAD_DEVELOPER;
-        return -1;
+        //Close currently open file if necessary
+        if (f->log_state != FIO_NOFILE) {
+            event_free(f->file_wr_ev);
+            close(f->log_fd);
+            f->log_fd = -1;
+        }
+        
+        //Deliberately use rest of string. This way, the user can enter spaces
+        //in their filename if necessary
+		f->log_fd = open(str, O_WRONLY | O_NONBLOCK);
+        if (f->log_fd < 0) {
+            owner->error_str = strerror(errno);
+            return -1;
+        }
+        
+        #warning Return values not checked
+        struct event_base *eb = event_get_base(owner->parent->wr_ev);
+        f->file_wr_ev = event_new(eb, f->log_fd, EV_WRITE, fio_file_wr_ev, f);
+        
+        //Save the filename for the user's sake (no one has perfect memory!)
+        filename_from_path(str, f->log_file);
+        
+        f->log_state = FIO_IDLE;
+        f->log_numsaved = 0; //Reset number of saved logs
+        f->owner->need_redraw = 1;
+        return 0;
 	}
 	case FIO_LOGON: {
-		owner->error_str = FIO_BAD_DEVELOPER;
-        return -1;
+        if (f->log_state == FIO_NOFILE) {
+            owner->error_str = FIO_NONE_OPEN;
+            return -1;
+        } else if (f->log_state != FIO_IDLE) {
+            owner->error_str = FIO_BAD_STATE;
+            return -1;
+        }
+        
+        f->log_state = FIO_LOGGING;
+        f->owner->need_redraw = 1;
+        return 0;
 	}
 	case FIO_LOGOFF: {
-		owner->error_str = FIO_BAD_DEVELOPER;
-        return -1;
+		//Whatever, just do nothing if we're not currently logging
+        if (f->log_state == FIO_LOGGING) {
+            f->log_state = FIO_IDLE;
+            f->owner->need_redraw = 1;
+        }
+        
+        return 0;
 	}
 	case FIO_SEND: {
 		if (f->send_state != FIO_IDLE) {
@@ -796,6 +835,7 @@ static int log_fio(dbg_guv *owner, unsigned const *log) {
 	}
 	
 	f->out_buf_len += 8;
+    f->log_numsaved++;
     
     //Check if we went past our high watermark
     if (f->out_buf_len > FIO_HI_WMARK) {
@@ -926,11 +966,15 @@ static void trigger_redraw_fio(void *item) {
 static void cleanup_fio(dbg_guv *owner) {
     fio *f = owner->mgr;
     if (f) {
-        #warning Remember to write the code for closing the logfile once I get to that!
         if (f->send_state != FIO_NOFILE) {
             event_free(f->file_rd_ev);
             close(f->send_fd);
             f->send_state = FIO_NOFILE; //No real need to set the state...
+        }
+        if (f->log_state != FIO_NOFILE) {
+            event_free(f->file_wr_ev);
+            close(f->log_fd);
+            f->log_state = FIO_NOFILE; //No real need to set the state...
         }
         free(f);
     }
@@ -942,7 +986,7 @@ guv_operations const fio_guv_ops = {
     .got_line = got_line_fio,
     .lines_req = lines_req_fio,
     .cmd_receipt = cmd_receipt_fio,
-    .log = NULL,
+    .log = log_fio,
     .draw_ops = {
         .draw_fn = draw_fn_fio,
         .draw_sz = draw_sz_fio,
