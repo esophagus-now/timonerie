@@ -82,7 +82,7 @@ void draw_cb(evutil_socket_t fd, short what, void *arg) {
 void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
     fpga_connection_info *f = arg;
     
-    int rc = read_fpga_connection(f, fd, 4);
+    int rc = read_fpga_connection(f, fd, 8);
     if (rc < 0) {
         char errmsg[80];
         sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
