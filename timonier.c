@@ -33,7 +33,7 @@ static int got_line_inter(dbg_guv *owner, char const *str) {
 	char line[80];
 	int len;
 	
-	cursor_pos(1, term_rows-1);
+	//cursor_pos(1, term_rows-1);
 	if (cmd.reg == LATCH) {
 		sprintf(line, "Committing values to %s" ERASE_TO_END "%n", owner->name, &len);
 	} else {
@@ -45,7 +45,8 @@ static int got_line_inter(dbg_guv *owner, char const *str) {
 			&len
 		);
 	}
-	write(1, line, len);
+    msg_win_dynamic_append(err_log, line);
+	//write(1, line, len);
 	
 	//These are the only fields not updated by the command receipt
 	switch (cmd.reg) {
