@@ -117,7 +117,7 @@ typedef struct _dbg_guv {
     char const *error_str;
 } dbg_guv;
 
-#define MAX_GUVS_PER_FPGA 32
+#define MAX_GUVS_PER_FPGA 128
 #define FCI_BUF_SIZE 512
 typedef struct _fpga_connection_info {    
     //For each dbg_guv, keep a local mirror of its control regs. These 
