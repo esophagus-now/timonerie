@@ -398,7 +398,7 @@ void got_rl_line(char *str) {
             int rc = symtab_append(ids, cmd.id, &uninit, sizeof(uninit));
             if (rc < 0) {
                 char line[80];
-                sprintf("Could not append symbol to table: %s", ids->error_str);
+                sprintf(line, "Could not append symbol to table: %s", ids->error_str);
                 msg_win_dynamic_append(err_log, line);
                 break;
             }
@@ -558,7 +558,7 @@ void got_rl_line(char *str) {
             int rc = symtab_append(ids, cmd.id, &symdat, sizeof(symdat));
             if (rc < 0) {
                 char line[80];
-                sprintf("Could not append symbol to table: %s", ids->error_str);
+                sprintf(line, "Could not append symbol to table: %s", ids->error_str);
                 msg_win_dynamic_append(err_log, line);
             }
             
