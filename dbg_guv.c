@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sched.h>
+#include <time.h>
 #include "dbg_guv.h"
 #include "textio.h"
 #include "timonier.h"
@@ -27,6 +28,7 @@ char const *const DBG_GUV_IMPOSSIBLE = "code reached a location that Marco thoug
 char const *const DBG_GUV_BAD_ADDRESS = "could not resolve address";
 char const *const DBG_GUV_OOM = "out of memory";
 char const *const DBG_GUV_NOT_ENOUGH_SPACE = "not enough room in buffer";
+char const *const DBG_GUV_INCOMPLETE_WORD = "received non-multiple-of-4 number of bytes";
 
 
 //////////////////////////////
@@ -115,6 +117,8 @@ char *append_log(dbg_guv *d, char *log) {
 //Enqueues the given data, which will be sent when the socket becomes 
 //ready next. Returns -1 and sets f->error_str on error, or 0 on success.
 //(Returns -2 if f was NULL)
+//TODO: usher this function into the modern era now that everything is
+//handled in 32-bit words?
 int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 	if (f == NULL) {
 		return -2; //This is all we can do
@@ -128,7 +132,7 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 	//There may be an elegant solution to this, but for now I have to
 	//deal with a few ugly cases:
 	//
-	//Case 1 (no wraparound, wr > rd):
+	//Case 1 (no wraparound, wr > rd):
 	//  [ | | | | | |x|x|x|x| | | | | | | | ]
 	//               ^rd     ^wr   ^wr+len
 	//
@@ -136,7 +140,7 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 	//  [ | | | | | |x|x|x|x| | | | | | | | ]
 	//     ^wr+len   ^rd     ^wr  
 	//
-	//Case 3 (no wraparound, wr < rd):
+	//Case 3 (no wraparound, wr < rd):
 	//  [x| | | | | | | | | | |x|x|x|x|x|x|x]
 	//     ^wr       ^wr+len   ^rd          
 	//
@@ -167,11 +171,11 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len) {
 //TODO: remove hardcoded widths
 //Constructs a dbg_guv commadn and queues it for output by calling
 //fpga_enequeue_tx
-int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, unsigned param) {
+int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, uint32_t param) {
 	fpga_connection_info *f = d->parent;
 	int dbg_guv_addr = d->addr;
-	#warning Remove hardcoded widths
-	unsigned cmd_addr = (dbg_guv_addr << 4) | reg;
+    
+	uint32_t cmd_addr = (dbg_guv_addr << 4) | reg;
 	
 	int rc = fpga_enqueue_tx(f, (char*) &cmd_addr, sizeof(cmd_addr));
 	if (rc == 0 && reg != LATCH) {
@@ -181,8 +185,8 @@ int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, unsigned param) {
 	return rc;
 }
 
-//TODO: runtime sizes for the stream?
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
+#warning This function has a million unchecked malloc calls
+int read_fpga_connection(fpga_connection_info *f, int fd) {
     if (f == NULL) {
         return -2; //This is all we can do
     }
@@ -198,55 +202,201 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
     } else if (num_read == 0) {
         f->error_str = DBG_GUV_CNX_CLOSED;
         return -1;
+    } else if (num_read % 4 != 0) {
+        f->error_str = DBG_GUV_INCOMPLETE_WORD;
     }
-    f->in_buf_pos += num_read;
+    f->in_buf_pos += num_read/4;
     
-    //For each complete command in the buffer, dispatch to correct guv
+    //For each complete receipt/log in the buffer, dispatch to correct guv
     
-    #warning Be careful about endianness, and implement runtime sizes
-    unsigned *rd_pos = (unsigned *)f->in_buf; //TODO: manage endianness
-    int msgs_left = (f->in_buf_pos / 8); //TODO: runtime size
+    #warning Be careful about endianness
+    uint32_t *rd_pos = f->in_buf; //TODO: manage endianness
+    int words_to_treat = f->in_buf_pos;
+    
+    //In principle, f->in_buf_pos should go back to 0. There is one (ugly)
+    //exception to this rule which is dealt with in the following while loop
+    //(i.e. the case when only a partial packet was read)
+    f->in_buf_pos = 0;
     
     //Iterate through all the complete messages in the read buffer
-    while (msgs_left --> 0) {
-        unsigned *beginning = rd_pos; //Hang onto this for guv ops calls
-        unsigned addr = *rd_pos++;
-        unsigned val = *rd_pos++;
+    while (words_to_treat > 0) {      
+        //Keep track of beginning of this packet, for the sake of the log
+        //function in the guv ops
+        uint32_t *beginning = rd_pos;
         
-        int dbg_guv_addr = addr & ((1 << addr_w) - 1);
-        int is_receipt = (addr >> addr_w) & 1;
+        //"Peek" at the next word in the read buffer to figure out if it's
+        //a command receipt or a log
+        uint32_t word = *rd_pos;
         
-        if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
-            //ignore this message
-            continue;
-        }
+        int dbg_guv_addr = word & ((1 << DBG_GUV_ADDR_WIDTH) - 1);
+        int is_receipt = (word >> DBG_GUV_ADDR_WIDTH) & 1;
         
-        dbg_guv *d = f->guvs + dbg_guv_addr;
         if (is_receipt) {
-            d->keep_pausing = val & 1;
-            d->keep_logging = (val>>1) & 1;
-            d->keep_dropping = (val>>2) & 1;
-            if (d->log_cnt == 0) d->log_cnt = (val>>3) & 1;
-            if (d->drop_cnt == 0) d->drop_cnt = (val>>4) & 1;
-            d->inj_TVALID = (val>>5) & 1;
-            d->dut_reset = (val>>6) & 1;
-            d->inj_failed = (val>>7) & 1;
-            d->dout_not_rdy_cnt = (val>>8);
+            //We have used this word
+            rd_pos++;
+            words_to_treat--;
+            
+            if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
+                //ignore this message
+                continue;
+            }
+            
+            dbg_guv *d = f->guvs + dbg_guv_addr;
+            
+            d->keep_pausing     = (word>>14) & 1;
+            d->keep_logging     = (word>>15) & 1;
+            d->keep_dropping    = (word>>16) & 1;
+            if (d->log_cnt == 0) {
+                d->log_cnt      = (word>>17) & 1;
+            }
+            if (d->drop_cnt == 0) {
+                d->drop_cnt     = (word>>18) & 1;
+            }
+            d->inj_TVALID       = (word>>19) & 1;
+            d->dut_reset        = (word>>20) & 1;
+            d->inj_failed       = (word>>21) & 1;
+            d->dout_not_rdy_cnt = (word>>22);
+            
             d->values_unknown = 0;
             d->need_redraw = 1;
             
             if (d->ops.cmd_receipt != NULL) {
-                //TODO: check error code
+                //TODO: check error code?
                 #warning Error code is not checked
-                d->ops.cmd_receipt(d, beginning);
+                d->ops.cmd_receipt(d, word);
             }
         } else {
-            //Write a log to a dbg_guv
-            char *log = malloc(32);
-            sprintf(log, "0x%08x (%u)", val, val);
-            char *old = append_log(d, log);
-            if (old != NULL) free(NULL);
+            //This is a log. We first need to figure out how many words it
+            //occupies
             
+            //Figure out sizes of AXI Stream channels (in bits)
+            int TID_width = ((word>>20) & 0x3F);
+            int TDEST_width = ((word>>26) & 0x3F);
+            int TID_TDEST_sum = TID_width + TDEST_width;
+            //Size of TDATA in bytes
+            int log_len = ((word>>14) & 0x1F) + 1;
+            int tdata_words = (log_len + 3)/4;
+            
+            //Add it all up
+            int num_words = tdata_words;
+            if (TID_TDEST_sum > 0) num_words++;
+            if (TID_TDEST_sum > 32) num_words++;
+            
+            //By the way, grab the value of TLAST from the header before we
+            //discard it
+            uint32_t TLAST = (word>>19) & 1;
+            
+            //Check if we have enough words left in the buffer to treat this
+            //entire flit. If not, then we'll shift the "straggler" words 
+            //down to the beginning of the read buffer, and break from the
+            //loop
+            if (words_to_treat < num_words) {
+                //Shift these entries down in the buffer. Ugly, but it works
+                int i;
+                for (i = 0; i < words_to_treat; i++) {
+                    f->in_buf[i] = *rd_pos++;
+                }
+                f->in_buf_pos = i;
+                break;
+            }
+            
+            //We shift our read position past the header now that we're done
+            //with it
+            rd_pos++;
+            words_to_treat--;
+            
+            
+            if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
+                //ignore this message
+                rd_pos += num_words;
+                words_to_treat -= num_words;
+                continue;
+            }
+            
+            dbg_guv *d = f->guvs + dbg_guv_addr;
+            
+            uint32_t TID, TDEST;
+            
+            //This is the ugly business of how TDEST and TID are encoded in
+            //the packet. 
+            if (TID_TDEST_sum > 0 && TID_TDEST_sum <= 32) {
+                //TDEST and TID are in a single word
+                word = *rd_pos++;
+                words_to_treat--;
+                
+                TID = word>>TDEST_width;
+                TDEST = word & ((1 << TDEST_width) - 1);
+            } else if (TID_TDEST_sum > 32) {
+                //TDEST and TID are in separate words
+                word = *rd_pos++;
+                words_to_treat--;
+                TID = word;
+                
+                word = *rd_pos++;
+                words_to_treat--;
+                TDEST = word;
+            }
+            
+            //Why the hell not? Add the current time into the dbg_guv window
+            time_t tm;
+            time(&tm);
+            free(append_log(d, strdup(ctime(&tm))));
+            
+            //Print TLAST
+            char *log = malloc(16);
+            sprintf(log, "TLAST: %d", TLAST);
+            free(append_log(d, log));
+            
+            //Print out TDEST and TID, if they are included
+            if (TID_width > 0) {
+                log = malloc(16);
+                sprintf(log, "TID:   %u", TID);
+                free(append_log(d, log));
+            }
+            if (TDEST_width > 0) {
+                log = malloc(16);
+                sprintf(log, "TDEST: %u", TDEST);
+                free(append_log(d, log));
+            }
+            
+            //Now iterate through TDATA and print it all out.
+            
+            //Special case: if the log is 4 bytes or fewer, we'll also be
+            //nice and print out the value in decimal
+            int print_dec = (log_len <= 4);
+            
+            //Read all complete words
+            while (log_len > 4) {
+                word = *rd_pos++;
+                words_to_treat--;
+                log_len -= 4;
+                
+                log = malloc(16);
+                sprintf(log, "> %08x", word);
+                free(append_log(d, log));
+            }
+            
+            //Read partial words (if necessary)
+            if (log_len > 0) {
+                word = *rd_pos++;
+                words_to_treat--;
+                
+                //This value is right-padded, so right-shift it to the proper
+                //place value:
+                word >>= 8*(4 - log_len);
+                
+                log = malloc(32);
+                
+                int incr;
+                sprintf(log, "> %0*x%n", log_len*2, word, &incr);
+                
+                if (print_dec) sprintf(log + incr, " (%u)", word);
+                
+                free(append_log(d, log));
+            }
+            
+            //Finally, if the guv manager has hooked up a log callback, call
+            //it. 
             if (d->ops.log != NULL) {
                 //TODO: check error code
                 #warning Error code is not checked
@@ -254,17 +404,6 @@ int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w) {
             }
         }
     }
-    
-    //Now the really ugly thing: take whatever partial message
-    //is left and shift it to the beginning of the buffer
-    int i;
-    #warning Need to handle runtime parameter for size
-    int leftover_bytes = f->in_buf_pos % 8; //TODO: runtime size
-    f->in_buf_pos -= leftover_bytes;
-    for (i = 0; i < leftover_bytes; i++) {
-        f->in_buf[i] = f->in_buf[f->in_buf_pos++];
-    }
-    f->in_buf_pos = i;
     
     return 0;
 }

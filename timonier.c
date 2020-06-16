@@ -35,9 +35,9 @@ static int got_line_inter(dbg_guv *owner, char const *str) {
 	
 	//cursor_pos(1, term_rows-1);
 	if (cmd.reg == LATCH) {
-		sprintf(line, "Committing values to %s" ERASE_TO_END "%n", owner->name, &len);
+		sprintf(line, "Committing values to %s%n", owner->name, &len);
 	} else {
-		sprintf(line, "Writing 0x%08x (%u) to %s::%s" ERASE_TO_END "%n", 
+		sprintf(line, "Writing 0x%08x (%u) to %s::%s%n", 
 			cmd.param, 
 			cmd.param,
 			owner->name,
@@ -786,7 +786,7 @@ static int lines_req_fio(dbg_guv *owner, int w, int h) {
     return 2; //We always use two lines
 }
 
-static int cmd_receipt_fio(dbg_guv *owner, unsigned const *receipt) {
+static int cmd_receipt_fio(dbg_guv *owner, uint32_t receipt) {
     fio *f = owner->mgr;
     
     //Very ugly hack; if logging logic inserts its own latch signal, then
@@ -802,7 +802,8 @@ static int cmd_receipt_fio(dbg_guv *owner, unsigned const *receipt) {
         return 0;
 }
 
-static int log_fio(dbg_guv *owner, unsigned const *log) {
+#warning BROKEN BROKEN BROKEN
+static int log_fio(dbg_guv *owner, uint32_t const *log) {
     fio *f = owner->mgr;
     
     //Don't do anything if we're not logging

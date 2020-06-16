@@ -2,6 +2,7 @@
 #define DBG_GUV_H 1
 
 #include <event2/event.h>
+#include <stdint.h>
 #include "textio.h"
 #include "twm.h"
 
@@ -49,11 +50,11 @@ typedef int lines_req_fn(struct _dbg_guv *owner, int w, int h);
 
 //A manager can supply this callback if it wishes to be notified about 
 //command receipts
-typedef int cmd_receipt_fn(struct _dbg_guv *owner, unsigned const *receipt);
+typedef int cmd_receipt_fn(struct _dbg_guv *owner, uint32_t receipt);
 
 //A manager can supply this callback if it wishes to be notified about 
 //logs from a dbg_guv
-typedef int log_fn(struct _dbg_guv *owner, unsigned const *log);
+typedef int log_fn(struct _dbg_guv *owner, uint32_t const *log);
 
 //Also allow a timonier the chance to clean itself up
 typedef void cleanup_mgr_fn(struct _dbg_guv *owner);
@@ -71,7 +72,8 @@ typedef struct _guv_operations {
 //To fix circular definition of dbg_guv and fpga_connection_info
 struct _fpga_connection_info;
 
-#define DBG_GUV_SCROLLBACK 1000
+#define DBG_GUV_SCROLLBACK 512
+#define DBG_GUV_ADDR_WIDTH 13 //This is a constant from the hardware
 //This struct contains all the state associated with displaying dbg_guv
 // information.
 typedef struct _dbg_guv {
@@ -91,7 +93,7 @@ typedef struct _dbg_guv {
     unsigned log_cnt;
     unsigned keep_dropping;
     unsigned drop_cnt;
-    unsigned inj_TDATA;
+    unsigned inj_TDATA; //TODO: fix so that it has the same shifting behaviour
     unsigned inj_TVALID;
     unsigned inj_TKEEP;
     unsigned inj_TLAST;
@@ -117,7 +119,7 @@ typedef struct _dbg_guv {
     char const *error_str;
 } dbg_guv;
 
-#define MAX_GUVS_PER_FPGA 128
+#define MAX_GUVS_PER_FPGA 1024
 #define FCI_BUF_SIZE 512
 typedef struct _fpga_connection_info {    
     //For each dbg_guv, keep a local mirror of its control regs. These 
@@ -126,10 +128,10 @@ typedef struct _fpga_connection_info {
     
     //Fields for reading from socket
     struct event *rd_ev; 
-    char in_buf[FCI_BUF_SIZE]; //If a message straddles two network 
-                               //packets, this buffer will hold on to 
-                               //partially received messages.
-    int in_buf_pos;            //Position in input buffer.
+    uint32_t in_buf[FCI_BUF_SIZE]; //If a message straddles two network 
+                                   //packets, this buffer will hold on to 
+                                   //partially received messages.
+    int in_buf_pos;                //Position in input buffer.
     
     //Fields for writing to socket
     struct event *wr_ev;
@@ -166,10 +168,9 @@ int fpga_enqueue_tx(fpga_connection_info *f, char const *buf, int len);
 //TODO: remove hardcoded widths
 //Constructs a dbg_guv commadn and queues it for output by calling
 //fpga_enequeue_tx
-int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, unsigned param);
+int dbg_guv_send_cmd(dbg_guv *d, dbg_reg_type reg, uint32_t param);
 
-//TODO: runtime sizes for the stream
-int read_fpga_connection(fpga_connection_info *f, int fd, int addr_w);
+int read_fpga_connection(fpga_connection_info *f, int fd);
 
 //Tries to write as much of f->out_buf as possible to the socket. This 
 //is non-blocking. Follows usual error return values
@@ -209,5 +210,6 @@ extern char const *const DBG_GUV_IMPOSSIBLE; //= "code reached a location that M
 extern char const *const DBG_GUV_BAD_ADDRESS; //= "could not resolve address";
 extern char const *const DBG_GUV_OOM; //= "out of memory";
 extern char const *const DBG_GUV_NOT_ENOUGH_SPACE; //= "not enough room in buffer";
+extern char const *const DBG_GUV_INCOMPLETE_WORD; // = "received non-multiple-of-4 number of bytes";
 
 #endif

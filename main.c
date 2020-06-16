@@ -82,7 +82,7 @@ void draw_cb(evutil_socket_t fd, short what, void *arg) {
 void fpga_read_cb(evutil_socket_t fd, short what, void *arg) {
     fpga_connection_info *f = arg;
     
-    int rc = read_fpga_connection(f, fd, 8);
+    int rc = read_fpga_connection(f, fd);
     if (rc < 0) {
         char errmsg[80];
         sprintf(errmsg, "Could not read from FPGA: %s. Closing...", f->error_str);
@@ -613,9 +613,9 @@ void got_rl_line(char *str) {
             
             //cursor_pos(1, term_rows-1);
             if (cmd.reg == LATCH) {
-                sprintf(line, "Committing values to %s" ERASE_TO_END "%n", g->name, &len);
+                sprintf(line, "Committing values to %s%n", g->name, &len);
             } else {
-                sprintf(line, "Writing 0x%08x (%u) to %s::%s" ERASE_TO_END "%n", 
+                sprintf(line, "Writing 0x%08x (%u) to %s::%s%n", 
                     cmd.param, 
                     cmd.param,
                     g->name,
