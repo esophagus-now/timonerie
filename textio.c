@@ -183,7 +183,7 @@ void readline_redisplay(void) {
     if (term_cols < 0 || term_cols > 200) return;
     
     cursor_pos(1,term_rows);
-    char line[term_cols]; 
+    char line[term_cols+1]; //Need space for NUL
     int len;
     
     //Write the line to the correct place on the screen

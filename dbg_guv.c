@@ -228,9 +228,18 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
         //a command receipt or a log
         uint32_t word = *rd_pos;
         
+        
         int dbg_guv_addr = word & ((1 << DBG_GUV_ADDR_WIDTH) - 1);
         int is_receipt = (word >> DBG_GUV_ADDR_WIDTH) & 1;
-        
+#ifdef DEBUG_ON        
+        fprintf(stderr, "Read %08x from %ld (words_to_treat = %d) [%s@%d]\n", 
+            word, 
+            rd_pos-f->in_buf, 
+            words_to_treat,
+            is_receipt ? "RX" : "LOG",
+            dbg_guv_addr
+        );
+#endif        
         if (is_receipt) {
             //We have used this word
             rd_pos++;
@@ -246,10 +255,10 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             d->keep_pausing     = (word>>14) & 1;
             d->keep_logging     = (word>>15) & 1;
             d->keep_dropping    = (word>>16) & 1;
-            if (d->log_cnt == 0) {
+            if (d->log_cnt == 0 || ((word>>17) & 1) == 0) {
                 d->log_cnt      = (word>>17) & 1;
             }
-            if (d->drop_cnt == 0) {
+            if (d->drop_cnt == 0 || ((word>>18) & 1) == 0) {
                 d->drop_cnt     = (word>>18) & 1;
             }
             d->inj_TVALID       = (word>>19) & 1;
@@ -278,9 +287,16 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             int tdata_words = (log_len + 3)/4;
             
             //Add it all up
-            int num_words = tdata_words;
-            if (TID_TDEST_sum > 0) num_words++;
-            if (TID_TDEST_sum > 32) num_words++;
+            int packet_words = 1 + tdata_words; //Include header word
+            if (TID_TDEST_sum > 0) packet_words++;
+            if (TID_TDEST_sum > 32) packet_words++;
+            
+            if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
+                //ignore this message
+                rd_pos += packet_words;
+                words_to_treat -= packet_words;
+                continue;
+            }
             
             //By the way, grab the value of TLAST from the header before we
             //discard it
@@ -290,7 +306,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             //entire flit. If not, then we'll shift the "straggler" words 
             //down to the beginning of the read buffer, and break from the
             //loop
-            if (words_to_treat < num_words) {
+            if (words_to_treat < packet_words) {
                 //Shift these entries down in the buffer. Ugly, but it works
                 int i;
                 for (i = 0; i < words_to_treat; i++) {
@@ -304,14 +320,6 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             //with it
             rd_pos++;
             words_to_treat--;
-            
-            
-            if (dbg_guv_addr >= MAX_GUVS_PER_FPGA) {
-                //ignore this message
-                rd_pos += num_words;
-                words_to_treat -= num_words;
-                continue;
-            }
             
             dbg_guv *d = f->guvs + dbg_guv_addr;
             
@@ -340,7 +348,10 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             //Why the hell not? Add the current time into the dbg_guv window
             time_t tm;
             time(&tm);
-            free(append_log(d, strdup(ctime(&tm))));
+            char *time_str = strdup(ctime(&tm));
+            //Strip newline
+            time_str[strlen(time_str) -1] = '\0';
+            free(append_log(d, time_str));
             
             //Print TLAST
             char *log = malloc(16);

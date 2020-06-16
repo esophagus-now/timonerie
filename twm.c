@@ -748,6 +748,10 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
     parent->num_children--;
     
     //Edit the parent to make sure we don't break any imvariants. 
+    //FINALLY! I found the really subtle bug that's been biting me on and
+    //off for a long time. When we do this trick of copying the child into
+    //its parent, we also need to move the focus if the child was focused
+    //before
     if (parent->num_children == 1) {
         twm_node *tmp = parent->children[0];
         parent->type = tmp->type;
@@ -764,6 +768,9 @@ static int twm_remove_node(twm_tree *t, twm_node *parent, int ind) {
         }
         
         tmp->type = TWM_UNINITIALIZED;
+        
+        if (t->focus == tmp) t->focus = parent;
+        
         destroy_twm_node(tmp);
         
         //Make sure we redraw this node and all its children, which have
@@ -1643,9 +1650,8 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
     }
     
     if (t->type == TWM_LEAF) {
-        if (t->item == item) {			
-            //Delete this node. For reasons I won't get into, to do that we must
-            //find its parent
+        if (t->item == item) {	
+            //Ugly corner case #1: if the item is the only node in the tree
             twm_node *parent = t->parent;
             if (parent == NULL) {
                 //This is the root of the tree (but double-check)
@@ -1659,8 +1665,23 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
                 tree->focus = NULL;
                 tree->error_str = TWM_SUCC;
                 return 0;
+            }	
+            
+            
+            //Ugly corner case #2: need to use our special-purpose function 
+            //for deleting this node if it is the focused node. I've said
+            //this somewhere before, but I'm no longer willing to make large
+            //structural changes, even if it's for the better. The special
+            //twm_tree_remove_focused was a band-aid fix, but it's an 
+            //effective one
+            if (t == tree->focus) {
+                int rc = twm_tree_remove_focused(tree);
+                if (rc == 0) return 1;
+                else return rc; //twm_tree_remove_focused has already set error_str
             }
             
+            //Delete this node. For reasons I won't get into, to do that we must
+            //find its parent
             int ind = twm_node_indexof(t, parent);
             if (ind < 0) {
                 //Propagate error
@@ -1670,6 +1691,7 @@ static int twm_tree_node_remove_item(twm_tree *tree, twm_node *t, void *item) {
             
             int rc = twm_remove_node(tree, parent, ind);
             if (rc == 0) {
+                destroy_twm_node(t);
                 return 1; //Searched and destroyed
             } else {
                 return rc; //tree->error_str already set
