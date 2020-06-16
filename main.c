@@ -741,7 +741,9 @@ int main(int argc, char **argv) {
     
     //Make sure we don't confuse valgrind
     event_base_free(ev_base);
+#if LIBEVENT_VERSION_NUMBER >= 0x02010100
     libevent_global_shutdown();
+#endif
     
     //Just keep clearing things up. Unnecessary, but it separates the chaff
     //from the grain when I look at valgrind
