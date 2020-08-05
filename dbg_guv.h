@@ -73,7 +73,7 @@ typedef struct _guv_operations {
 struct _fpga_connection_info;
 
 #define DBG_GUV_SCROLLBACK 512
-#define DBG_GUV_ADDR_WIDTH 13 //This is a constant from the hardware
+#define DBG_GUV_ADDR_WIDTH 12 //This is a constant from the hardware
 //This struct contains all the state associated with displaying dbg_guv
 // information.
 typedef struct _dbg_guv {

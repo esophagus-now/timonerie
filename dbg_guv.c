@@ -252,19 +252,19 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             
             dbg_guv *d = f->guvs + dbg_guv_addr;
             
-            d->keep_pausing     = (word>>14) & 1;
-            d->keep_logging     = (word>>15) & 1;
-            d->keep_dropping    = (word>>16) & 1;
-            if (d->log_cnt == 0 || ((word>>17) & 1) == 0) {
-                d->log_cnt      = (word>>17) & 1;
+            d->keep_pausing     = (word>>13) & 1;
+            d->keep_logging     = (word>>14) & 1;
+            d->keep_dropping    = (word>>15) & 1;
+            if (d->log_cnt == 0 || ((word>>16) & 1) == 0) {
+                d->log_cnt      = (word>>16) & 1;
             }
-            if (d->drop_cnt == 0 || ((word>>18) & 1) == 0) {
-                d->drop_cnt     = (word>>18) & 1;
+            if (d->drop_cnt == 0 || ((word>>17) & 1) == 0) {
+                d->drop_cnt     = (word>>17) & 1;
             }
-            d->inj_TVALID       = (word>>19) & 1;
-            d->dut_reset        = (word>>20) & 1;
-            d->inj_failed       = (word>>21) & 1;
-            d->dout_not_rdy_cnt = (word>>22);
+            d->inj_TVALID       = (word>>18) & 1;
+            d->dut_reset        = (word>>19) & 1;
+            d->inj_failed       = (word>>20) & 1;
+            d->dout_not_rdy_cnt = (word>>21);
             
             d->values_unknown = 0;
             d->need_redraw = 1;
@@ -283,7 +283,7 @@ int read_fpga_connection(fpga_connection_info *f, int fd) {
             int TDEST_width = ((word>>26) & 0x3F);
             int TID_TDEST_sum = TID_width + TDEST_width;
             //Size of TDATA in bytes
-            int log_len = ((word>>14) & 0x1F) + 1;
+            int log_len = ((word>>13) & 0x3F) + 1;
             int tdata_words = (log_len + 3)/4;
             
             //Add it all up
